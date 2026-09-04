@@ -1,0 +1,37 @@
+{
+  "labels": [
+    { "min": 80, "max": 100, "label": "Exceptional Positive" },
+    { "min": 40, "max": 79, "label": "Strong Positive" },
+    { "min": 10, "max": 39, "label": "Mild Positive" },
+    { "min": -9, "max": 9, "label": "Neutral / No Meaningful Change" },
+    { "min": -39, "max": -10, "label": "Mild Negative" },
+    { "min": -79, "max": -40, "label": "Strong Negative" },
+    { "min": -100, "max": -80, "label": "Critical Negative" }
+  ],
+  "components": {
+    "priceMovement": {
+      "maxPoints": 25,
+      "thresholds": [
+        { "absPercent": 2, "points": 10 },
+        { "absPercent": 5, "points": 20 },
+        { "absPercent": 10, "points": 25 }
+      ],
+      "circuitHitPoints": 25
+    },
+    "volumeVsAverage": {
+      "maxPoints": 20,
+      "thresholds": [
+        { "aboveAveragePercent": 10, "points": 5 },
+        { "aboveAveragePercent": 20, "points": 10 },
+        { "aboveAveragePercent": 50, "points": 15 },
+        { "aboveAveragePercent": 100, "points": 20 }
+      ]
+    },
+    "quarterlyEarningsSurprise": { "maxPoints": 15, "meetPoints": 3 },
+    "newsSentiment": { "maxPoints": 15 },
+    "technicalIndicators": { "maxPoints": 10 },
+    "analystRatingChange": { "maxPoints": 5, "initiationPoints": 2 },
+    "corporateAction": { "maxPoints": 5 },
+    "userSpecificEvent": { "maxPoints": 5 }
+  }
+}
