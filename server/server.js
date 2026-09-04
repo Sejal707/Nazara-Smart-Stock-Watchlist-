@@ -1,7 +1,10 @@
 import express from "express";
 import cors from "cors";
-import { db, getAttentionView, getUserBySession, getUserState, loginUser, markAttentionViewed, markStockAccess, migrate, setUserState } from "./db.js";
-import { seedWatchlistsForUser } from "./seed.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { db, getAttentionView, getUserBySession, getUserState, loginUser, markAttentionViewed, markStockAccess, setUserState } from "./db.js";
+import { seedAll, seedWatchlistsForUser } from "./seed.js";
 import { computeScore } from "./scoringEngine.js";
 import { ResilientMarketDataService, YahooFinanceChartAdapter } from "./adapters/marketDataAdapter.js";
 import { NseListedEquityAdapter } from "./adapters/listedStocksAdapter.js";
@@ -11,8 +14,10 @@ import { buildDetail } from "./seedData.js";
 
 const app = express();
 const port = process.env.PORT || 8787;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDistDir = path.resolve(__dirname, "../dist");
 
-migrate();
+seedAll();
 app.use(cors());
 app.use(express.json());
 
@@ -487,6 +492,14 @@ syncListedStocks({ silent: true }).catch((error) => {
   console.warn(`NSE symbol auto-sync skipped: ${error.message}`);
 });
 
+if (fs.existsSync(clientDistDir)) {
+  app.use(express.static(clientDistDir));
+  app.get("/{*path}", (req, res, next) => {
+    if (req.path.startsWith("/api/")) return next();
+    res.sendFile(path.join(clientDistDir, "index.html"));
+  });
+}
+
 app.listen(port, () => {
-  console.log(`Nazara API listening on http://localhost:${port}`);
+  console.log(`Nazara server listening on http://localhost:${port}`);
 });

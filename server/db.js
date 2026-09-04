@@ -6,9 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const dataDir = path.resolve(__dirname, "../data");
-export const dbPath = path.join(dataDir, "nazara.sqlite");
+export const dbPath = process.env.DATABASE_PATH || path.join(dataDir, "nazara.sqlite");
 
-fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 export const db = new DatabaseSync(dbPath);
 

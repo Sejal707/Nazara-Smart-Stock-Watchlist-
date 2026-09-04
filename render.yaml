@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: nazara-smart-stock-watchlist
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      - key: DATABASE_PATH
+        value: /var/data/nazara.sqlite
+    disk:
+      name: nazara-data
+      mountPath: /var/data
+      sizeGB: 1

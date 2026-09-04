@@ -19,6 +19,22 @@ To reseed the database:
 npm run seed
 ```
 
+## Deploy Live
+
+Deploy this as one Node web service, not as a static-only site. The Express server serves both the API and the built React frontend.
+
+Recommended Render settings:
+
+```text
+Build command: npm install && npm run build
+Start command: npm start
+Environment variable: DATABASE_PATH=/var/data/nazara.sqlite
+Persistent disk mount path: /var/data
+Node version: 24+
+```
+
+This repository includes `render.yaml`, so Render can also deploy it as a Blueprint from GitHub. The persistent disk is important because it keeps user accounts, passwords, watchlists, viewed alerts, and cached stock data after server restarts.
+
 ## Architecture
 
 ```text

@@ -3,8 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "start": "node server/server.js",
     "server": "node server/server.js",
     "seed": "node server/seed.js",
     "build": "node scripts/build.mjs",
