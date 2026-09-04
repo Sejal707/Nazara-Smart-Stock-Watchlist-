@@ -8,9 +8,3 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 24
-      - key: DATABASE_PATH
-        value: /var/data/nazara.sqlite
-    disk:
-      name: nazara-data
-      mountPath: /var/data
-      sizeGB: 1
