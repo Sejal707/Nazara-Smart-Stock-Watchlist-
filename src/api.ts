@@ -16,6 +16,11 @@ export function storedUser() {
   }
 }
 
+export function clearStoredSession() {
+  localStorage.removeItem("nazaraUser");
+  localStorage.removeItem("nazaraSessionToken");
+}
+
 function authHeaders(options?: RequestInit) {
   const token = storedToken();
   return {
@@ -33,7 +38,11 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `Request failed: ${response.status}`);
+    const error = new Error(body.error ?? `Request failed: ${response.status}`);
+    if (response.status === 401) {
+      error.name = "AuthError";
+    }
+    throw error;
   }
 
   return response.json();

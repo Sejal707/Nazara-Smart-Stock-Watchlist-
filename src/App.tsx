@@ -29,7 +29,7 @@ import {
   YAxis
 } from "recharts";
 import { api } from "./api";
-import { storedUser } from "./api";
+import { clearStoredSession, storedUser } from "./api";
 import type { Bootstrap, MustLookItem, Score, Stock, StockDetail, User, Watchlist, WatchlistStock } from "./types";
 
 const tabs = ["Overview", "Fundamentals", "Brokerage & Targets", "Concall", "Holdings", "News & Sentiment", "Corporate Actions"] as const;
@@ -88,7 +88,20 @@ export function App() {
   async function load() {
     if (!currentUser) return;
     setError(null);
-    const data = await api.bootstrap();
+    let data: Bootstrap;
+    try {
+      data = await api.bootstrap();
+    } catch (err) {
+      if (err instanceof Error && (err.name === "AuthError" || err.message === "Login required")) {
+        clearStoredSession();
+        setCurrentUser(null);
+        setBootstrap(null);
+        setSelected(null);
+        setLoading(false);
+        return;
+      }
+      throw err;
+    }
     setBootstrap(data);
     setCurrentUser(data.user);
     localStorage.setItem("nazaraUser", JSON.stringify(data.user));
@@ -130,8 +143,7 @@ export function App() {
   }
 
   function logout() {
-    localStorage.removeItem("nazaraUser");
-    localStorage.removeItem("nazaraSessionToken");
+    clearStoredSession();
     setCurrentUser(null);
     setBootstrap(null);
     setActiveId(null);
