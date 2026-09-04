@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { db, getAttentionView, getUserBySession, getUserState, loginUser, markAttentionViewed, markStockAccess, setUserState } from "./db.js";
 import { seedAll, seedWatchlistsForUser } from "./seed.js";
 import { computeScore } from "./scoringEngine.js";
-import { ResilientMarketDataService, YahooFinanceChartAdapter } from "./adapters/marketDataAdapter.js";
+import { FallbackMarketDataAdapter, FinancialModelingPrepAdapter, ResilientMarketDataService, YahooFinanceChartAdapter } from "./adapters/marketDataAdapter.js";
 import { NseListedEquityAdapter } from "./adapters/listedStocksAdapter.js";
 import { NewsRssAdapter } from "./adapters/newsAdapter.js";
 import { BrokerageRssAdapter } from "./adapters/brokerageAdapter.js";
@@ -203,7 +203,10 @@ function attentionFeed(userId, lastVisitedAt) {
 }
 
 const marketData = new ResilientMarketDataService({
-  adapter: new YahooFinanceChartAdapter(),
+  adapter: new FallbackMarketDataAdapter([
+    new FinancialModelingPrepAdapter(process.env.FMP_API_KEY),
+    new YahooFinanceChartAdapter()
+  ]),
   getCachedDetail: getDetail,
   saveDetail
 });
