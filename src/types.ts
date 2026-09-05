@@ -1,3 +1,5 @@
+export type EntityId = number | string;
+
 export type ScoreBreakdown = {
   key: string;
   label: string;
@@ -21,7 +23,7 @@ export type Stock = {
 };
 
 export type User = {
-  id: number;
+  id: EntityId;
   handle: string;
   displayName: string;
   createdAt: string;
@@ -76,7 +78,7 @@ export type WatchlistStock = Stock & {
 };
 
 export type Watchlist = {
-  id: number;
+  id: EntityId;
   name: string;
   createdAt?: string;
   stocks: WatchlistStock[];

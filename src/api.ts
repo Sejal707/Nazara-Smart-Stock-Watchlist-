@@ -1,4 +1,4 @@
-import type { Bootstrap, Stock, StockDetail, User } from "./types";
+import type { Bootstrap, EntityId, Stock, StockDetail, User } from "./types";
 
 export function storedToken() {
   return localStorage.getItem("nazaraSessionToken");
@@ -64,15 +64,15 @@ export const api = {
     request<{ ok: boolean; symbol: string; happenedAt: string; viewedAt: string }>(`/api/attention/${symbol}/viewed`, { method: "POST" }),
   createWatchlist: (name: string) =>
     request("/api/watchlists", { method: "POST", body: JSON.stringify({ name }) }),
-  renameWatchlist: (id: number, name: string) =>
+  renameWatchlist: (id: EntityId, name: string) =>
     request(`/api/watchlists/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
-  deleteWatchlist: (id: number) =>
+  deleteWatchlist: (id: EntityId) =>
     request(`/api/watchlists/${id}`, { method: "DELETE" }),
-  addStock: (id: number, symbol: string) =>
+  addStock: (id: EntityId, symbol: string) =>
     request(`/api/watchlists/${id}/stocks`, { method: "POST", body: JSON.stringify({ symbol }) }),
-  removeStock: (id: number, symbol: string) =>
+  removeStock: (id: EntityId, symbol: string) =>
     request(`/api/watchlists/${id}/stocks/${symbol}`, { method: "DELETE" }),
-  reorder: (id: number, symbols: string[]) =>
+  reorder: (id: EntityId, symbols: string[]) =>
     request(`/api/watchlists/${id}/reorder`, { method: "PATCH", body: JSON.stringify({ symbols }) }),
   refreshStock: (symbol: string) =>
     request<StockDetail>(`/api/refresh/${symbol}`, { method: "POST" })

@@ -3,8 +3,8 @@ import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { db, getAttentionView, getUserBySession, getUserState, loginUser, markAttentionViewed, markStockAccess, setUserState } from "./db.js";
-import { seedAll, seedWatchlistsForUser } from "./seed.js";
+import { db, getAttentionView as getLocalAttentionView, getUserBySession as getLocalUserBySession, getUserState as getLocalUserState, loginUser as loginLocalUser, markAttentionViewed as markLocalAttentionViewed, markStockAccess as markLocalStockAccess, setUserState as setLocalUserState } from "./db.js";
+import { seedAll, seedWatchlistsForUser as seedLocalWatchlistsForUser } from "./seed.js";
 import { computeScore } from "./scoringEngine.js";
 import { ResilientMarketDataService, YahooFinanceChartAdapter } from "./adapters/marketDataAdapter.js";
 import { NseListedEquityAdapter } from "./adapters/listedStocksAdapter.js";
@@ -13,6 +13,7 @@ import { BrokerageRssAdapter } from "./adapters/brokerageAdapter.js";
 import { buildDetail } from "./seedData.js";
 import { config } from "./config.js";
 import { mapPool } from "./market/singleFlight.js";
+import { supabaseStore } from "./supabaseStore.js";
 
 const app = express();
 const port = process.env.PORT || 8787;
@@ -35,6 +36,25 @@ function normalizeSymbol(value) {
   const symbol = raw.endsWith(".NS") ? raw : `${raw.replace(/\.NS$/, "")}.NS`;
   return symbolPattern.test(symbol) ? symbol : null;
 }
+
+const userStore = supabaseStore.enabled ? supabaseStore : {
+  loginUser: async (displayName, password) => loginLocalUser(displayName, password),
+  getUserBySession: async (token) => getLocalUserBySession(token),
+  getUserState: async (userId, key, fallback) => getLocalUserState(userId, key, fallback),
+  setUserState: async (userId, key, value) => setLocalUserState(userId, key, value),
+  seedWatchlistsForUser: async (userId) => seedLocalWatchlistsForUser(userId),
+  getAttentionView: async (userId, symbol) => getLocalAttentionView(userId, symbol),
+  markAttentionViewed: async (userId, symbol, alertHappenedAt) => markLocalAttentionViewed(userId, symbol, alertHappenedAt),
+  markStockAccess: async (userId, symbol) => markLocalStockAccess(userId, symbol),
+  accessedStocks: async (userId) => db.prepare(`
+    SELECT sa.symbol, s.name, s.sector, sa.last_accessed_at AS lastAccessedAt, sa.view_count AS viewCount
+    FROM stock_access sa
+    JOIN stocks s ON s.symbol = sa.symbol
+    WHERE sa.user_id = ?
+    ORDER BY sa.last_accessed_at DESC
+    LIMIT 8
+  `).all(userId)
+};
 
 function stockFromRow(row) {
   return {
@@ -92,7 +112,32 @@ function latestScore(symbol) {
   return { score: row.score, label: row.label, breakdown: JSON.parse(row.breakdown), createdAt: row.created_at };
 }
 
-function listWatchlists(userId) {
+function watchlistStockFromSymbol(symbol) {
+  const row = db.prepare("SELECT * FROM stocks WHERE symbol = ?").get(symbol);
+  if (!row) return null;
+  const detail = getDetail(row.symbol);
+  return {
+    ...stockFromRow(row),
+    quote: detail?.quote,
+    intraday: detail?.intraday,
+    dataQuality: detail?.dataQuality,
+    score: detail?.score ?? latestScore(row.symbol)
+  };
+}
+
+async function listWatchlists(userId) {
+  if (supabaseStore.enabled) {
+    const lists = await supabaseStore.listWatchlists(userId);
+    return lists.map((list) => ({
+      id: list.id,
+      name: list.name,
+      createdAt: list.createdAt,
+      stocks: list.symbols
+        .map((row) => watchlistStockFromSymbol(row.symbol))
+        .filter(Boolean)
+    }));
+  }
+
   const lists = db.prepare("SELECT id, name, created_at FROM watchlists WHERE user_id = ? ORDER BY id").all(userId);
   return lists.map((list) => {
     const rows = db.prepare(`
@@ -105,22 +150,43 @@ function listWatchlists(userId) {
       id: list.id,
       name: list.name,
       createdAt: list.created_at,
-      stocks: rows.map((row) => {
-        const detail = getDetail(row.symbol);
-        return {
-          ...stockFromRow(row),
-          quote: detail?.quote,
-          intraday: detail?.intraday,
-          dataQuality: detail?.dataQuality,
-          score: detail?.score ?? latestScore(row.symbol)
-        };
-      })
+      stocks: rows.map((row) => watchlistStockFromSymbol(row.symbol)).filter(Boolean)
     };
   });
 }
 
-function mustLookSince(userId, lastVisitedAt) {
-  const rows = db.prepare(`
+async function watchedStockRows(userId) {
+  if (supabaseStore.enabled) {
+    const symbols = await supabaseStore.watchlistSymbols(userId);
+    if (!symbols.length) return [];
+    const placeholders = symbols.map(() => "?").join(",");
+    return db.prepare(`SELECT DISTINCT symbol, name, sector FROM stocks WHERE symbol IN (${placeholders})`)
+      .all(...symbols);
+  }
+  return db.prepare(`
+    SELECT DISTINCT s.symbol, s.name, s.sector
+    FROM watchlists w
+    JOIN watchlist_stocks ws ON ws.watchlist_id = w.id
+    JOIN stocks s ON s.symbol = ws.symbol
+    WHERE w.user_id = ?
+  `).all(userId);
+}
+
+async function mustLookSince(userId, lastVisitedAt) {
+  let rows;
+  if (supabaseStore.enabled) {
+    const symbols = await supabaseStore.watchlistSymbols(userId);
+    if (!symbols.length) return [];
+    const placeholders = symbols.map(() => "?").join(",");
+    rows = db.prepare(`
+      SELECT e.*, s.name, s.sector
+      FROM events e
+      JOIN stocks s ON s.symbol = e.symbol
+      WHERE e.symbol IN (${placeholders}) AND e.happened_at > ?
+      ORDER BY ABS(e.impact) DESC, e.happened_at DESC
+    `).all(...symbols, lastVisitedAt);
+  } else {
+    rows = db.prepare(`
     SELECT e.*, s.name, s.sector
     FROM events e
     JOIN stocks s ON s.symbol = e.symbol
@@ -129,12 +195,14 @@ function mustLookSince(userId, lastVisitedAt) {
     WHERE e.happened_at > ?
     GROUP BY e.id
     ORDER BY ABS(e.impact) DESC, e.happened_at DESC
-  `).all(userId, lastVisitedAt);
+    `).all(userId, lastVisitedAt);
+  }
 
-  return rows.map((row) => {
-    const attentionView = getAttentionView(userId, row.symbol);
+  const items = [];
+  for (const row of rows) {
+    const attentionView = await userStore.getAttentionView(userId, row.symbol);
     const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(row.happened_at) : false;
-    return {
+    items.push({
       id: row.id,
       symbol: row.symbol,
       name: row.name,
@@ -146,8 +214,9 @@ function mustLookSince(userId, lastVisitedAt) {
       happenedAt: row.happened_at,
       viewed,
       lastViewedAt: attentionView?.viewedAt ?? null
-    };
-  });
+    });
+  }
+  return items;
 }
 
 function latestTimestamp(...values) {
@@ -159,21 +228,17 @@ function latestTimestamp(...values) {
   return new Date(Math.max(...times)).toISOString();
 }
 
-function attentionFeed(userId, lastVisitedAt) {
-  const rows = db.prepare(`
-    SELECT DISTINCT s.symbol, s.name, s.sector
-    FROM watchlists w
-    JOIN watchlist_stocks ws ON ws.watchlist_id = w.id
-    JOIN stocks s ON s.symbol = ws.symbol
-    WHERE w.user_id = ?
-  `).all(userId);
+async function attentionFeed(userId, lastVisitedAt) {
+  const rows = await watchedStockRows(userId);
+  const accessedRows = supabaseStore.enabled ? await supabaseStore.accessedStocks(userId) : [];
 
   const items = [];
   for (const row of rows) {
     const detail = ensureDetail(row.symbol);
     if (!detail?.score) continue;
-    const stockAccess = db.prepare("SELECT last_accessed_at FROM stock_access WHERE user_id = ? AND symbol = ?")
-      .get(userId, row.symbol);
+    const stockAccess = supabaseStore.enabled
+      ? accessedRows.find((access) => access.symbol === row.symbol)
+      : db.prepare("SELECT last_accessed_at FROM stock_access WHERE user_id = ? AND symbol = ?").get(userId, row.symbol);
     const lastSeenForStock = stockAccess?.last_accessed_at ?? lastVisitedAt;
     const previousScore = db.prepare(`
       SELECT score FROM scores
@@ -185,7 +250,7 @@ function attentionFeed(userId, lastVisitedAt) {
     const freshNews = latestNews && new Date(latestNews.date) > new Date(lastSeenForStock);
     const freshBrokerage = detail.brokerage && new Date(detail.brokerage.lastUpdated) > new Date(lastSeenForStock);
     const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
-    const attentionView = getAttentionView(userId, row.symbol);
+    const attentionView = await userStore.getAttentionView(userId, row.symbol);
     const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(happenedAt) : false;
     const reasons = detail.score.breakdown
       .filter((reason) => Math.abs(reason.points) >= 4)
@@ -227,8 +292,8 @@ const listedStocks = new NseListedEquityAdapter();
 const newsAdapter = new NewsRssAdapter();
 const brokerageAdapter = new BrokerageRssAdapter();
 
-function requestUser(req, res) {
-  const user = getUserBySession(req.header("X-Session-Token"));
+async function requestUser(req, res) {
+  const user = await userStore.getUserBySession(req.header("X-Session-Token"));
   if (!user) {
     res.status(401).json({ error: "Login required" });
     return null;
@@ -251,7 +316,7 @@ function upsertStock(stock) {
 async function syncListedStocks({ silent = false } = {}) {
   const remoteStocks = await listedStocks.list();
   for (const stock of remoteStocks) upsertStock(stock);
-  setUserState(1, "stockUniverseSyncedAt", new Date().toISOString());
+  setLocalUserState(1, "stockUniverseSyncedAt", new Date().toISOString());
   if (!silent) console.log(`${remoteStocks.length} NSE symbols synced`);
   return { count: remoteStocks.length, source: listedStocks.name };
 }
@@ -321,53 +386,61 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   try {
-    const session = loginUser(req.body.displayName, req.body.password);
-    seedWatchlistsForUser(session.user.id);
+    const session = await userStore.loginUser(req.body.displayName, req.body.password);
+    await userStore.seedWatchlistsForUser(session.user.id);
     res.json(session);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.get("/api/auth/me", (req, res) => {
-  const user = requestUser(req, res);
+app.get("/api/auth/me", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   res.json({ user });
 });
 
 app.get("/api/bootstrap", async (req, res) => {
-  const user = requestUser(req, res);
+  const user = await requestUser(req, res);
   if (!user) return;
-  seedWatchlistsForUser(user.id);
-  const lastVisitedAt = getUserState(user.id, "lastVisitedAt", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-  const watchlistSymbols = db.prepare(`
-    SELECT DISTINCT ws.symbol
-    FROM watchlist_stocks ws
-    JOIN watchlists w ON w.id = ws.watchlist_id
-    WHERE w.user_id = ?
-  `).all(user.id).map((row) => row.symbol);
+  await userStore.seedWatchlistsForUser(user.id);
+  const lastVisitedAt = await userStore.getUserState(user.id, "lastVisitedAt", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  const watchlistSymbols = supabaseStore.enabled
+    ? await supabaseStore.watchlistSymbols(user.id)
+    : db.prepare(`
+      SELECT DISTINCT ws.symbol
+      FROM watchlist_stocks ws
+      JOIN watchlists w ON w.id = ws.watchlist_id
+      WHERE w.user_id = ?
+    `).all(user.id).map((row) => row.symbol);
   await refreshSymbols(watchlistSymbols, { force: false });
-  const watchlists = listWatchlists(user.id);
-  const mustLook = mustLookSince(user.id, lastVisitedAt);
+  const watchlists = await listWatchlists(user.id);
+  const mustLook = await mustLookSince(user.id, lastVisitedAt);
+  const feed = await attentionFeed(user.id, lastVisitedAt);
+  const accessedStocks = supabaseStore.enabled
+    ? (await supabaseStore.accessedStocks(user.id)).map((row) => {
+      const stock = db.prepare("SELECT name, sector FROM stocks WHERE symbol = ?").get(row.symbol);
+      return {
+        symbol: row.symbol,
+        name: stock?.name ?? row.symbol,
+        sector: stock?.sector ?? "NSE",
+        lastAccessedAt: row.last_accessed_at,
+        viewCount: row.view_count
+      };
+    })
+    : await userStore.accessedStocks(user.id);
   res.json({
     user,
     watchlists,
     stocks: getStocks({ limit: 120 }),
     stockUniverseCount: db.prepare("SELECT COUNT(*) AS count FROM stocks").get().count,
-    mustLook: [...attentionFeed(user.id, lastVisitedAt), ...mustLook]
+    mustLook: [...feed, ...mustLook]
       .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
       .slice(0, 10),
     lastVisitedAt,
-    accessedStocks: db.prepare(`
-      SELECT sa.symbol, s.name, s.sector, sa.last_accessed_at AS lastAccessedAt, sa.view_count AS viewCount
-      FROM stock_access sa
-      JOIN stocks s ON s.symbol = sa.symbol
-      WHERE sa.user_id = ?
-      ORDER BY sa.last_accessed_at DESC
-      LIMIT 8
-    `).all(user.id),
+    accessedStocks,
     dataSources: [
       { name: "Yahoo Finance chart adapter", coverage: "Price/OHLC/intraday", limitation: "Auto-polled public live/delayed endpoint; cached fallback on failure" },
       { name: "Google News RSS", coverage: "Latest company, sector, IPO, policy and market news", limitation: "Search-ranked RSS headlines; source links retained when available" },
@@ -379,11 +452,11 @@ app.get("/api/bootstrap", async (req, res) => {
   });
 });
 
-app.post("/api/visit", (req, res) => {
-  const user = requestUser(req, res);
+app.post("/api/visit", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   const now = new Date().toISOString();
-  setUserState(user.id, "lastVisitedAt", now);
+  await userStore.setUserState(user.id, "lastVisitedAt", now);
   res.json({ lastVisitedAt: now });
 });
 
@@ -407,7 +480,7 @@ app.post("/api/stocks/sync", async (_req, res) => {
 
 
 app.get("/api/stocks/:symbol/history", async (req, res) => {
-  const user = requestUser(req, res);
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -421,19 +494,19 @@ app.get("/api/stocks/:symbol/history", async (req, res) => {
   }
 });
 
-app.get("/api/stocks/:symbol", (req, res) => {
-  const user = requestUser(req, res);
+app.get("/api/stocks/:symbol", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   const detail = ensureDetail(symbol);
   if (!detail) return res.status(404).json({ error: "Stock not found" });
-  markStockAccess(user.id, detail.stock.symbol);
+  await userStore.markStockAccess(user.id, detail.stock.symbol);
   return res.json(detail);
 });
 
 app.get("/api/market/quote/:symbol", async (req, res) => {
-  const user = requestUser(req, res);
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -442,21 +515,21 @@ app.get("/api/market/quote/:symbol", async (req, res) => {
 });
 
 app.post("/api/refresh/:symbol", async (req, res) => {
-  const user = requestUser(req, res);
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   try {
     const detail = await refreshSymbol(symbol);
-    markStockAccess(user.id, detail.stock.symbol);
+    await userStore.markStockAccess(user.id, detail.stock.symbol);
     res.json(detail);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/attention/:symbol/viewed", (req, res) => {
-  const user = requestUser(req, res);
+app.post("/api/attention/:symbol/viewed", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
@@ -464,80 +537,108 @@ app.post("/api/attention/:symbol/viewed", (req, res) => {
   if (!detail) return res.status(404).json({ error: "Stock not found" });
   const latestNews = [...(detail.news ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
   const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
-  const viewedAt = markAttentionViewed(user.id, detail.stock.symbol, happenedAt);
+  const viewedAt = await userStore.markAttentionViewed(user.id, detail.stock.symbol, happenedAt);
   res.json({ ok: true, symbol: detail.stock.symbol, happenedAt, viewedAt });
 });
 
-app.post("/api/watchlists", (req, res) => {
-  const user = requestUser(req, res);
+app.post("/api/watchlists", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   const name = String(req.body.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Watchlist name is required" });
+  if (supabaseStore.enabled) {
+    const created = await supabaseStore.createWatchlist(user.id, name);
+    return res.status(201).json(created);
+  }
   const result = db.prepare("INSERT INTO watchlists (name, user_id) VALUES (?, ?)").run(name, user.id);
-  res.status(201).json({ id: result.lastInsertRowid, name, stocks: [] });
+  return res.status(201).json({ id: result.lastInsertRowid, name, stocks: [] });
 });
 
-app.patch("/api/watchlists/:id", (req, res) => {
-  const user = requestUser(req, res);
+app.patch("/api/watchlists/:id", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
-  const id = Number(req.params.id);
+  const id = supabaseStore.enabled ? String(req.params.id) : Number(req.params.id);
   const name = String(req.body.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "Watchlist name is required" });
+  if (supabaseStore.enabled) {
+    const found = await supabaseStore.renameWatchlist(user.id, id, name);
+    if (!found) return res.status(404).json({ error: "Watchlist not found" });
+    return res.json({ ok: true });
+  }
   db.prepare("UPDATE watchlists SET name = ? WHERE id = ? AND user_id = ?").run(name, id, user.id);
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
-app.delete("/api/watchlists/:id", (req, res) => {
-  const user = requestUser(req, res);
+app.delete("/api/watchlists/:id", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
+  if (supabaseStore.enabled) {
+    await supabaseStore.deleteWatchlist(user.id, String(req.params.id));
+    return res.json({ ok: true });
+  }
   db.prepare("DELETE FROM watchlists WHERE id = ? AND user_id = ?").run(Number(req.params.id), user.id);
   res.json({ ok: true });
 });
 
-app.post("/api/watchlists/:id/stocks", (req, res) => {
-  const user = requestUser(req, res);
+app.post("/api/watchlists/:id/stocks", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
-  const id = Number(req.params.id);
-  const list = db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(id, user.id);
-  if (!list) return res.status(404).json({ error: "Watchlist not found" });
+  const id = supabaseStore.enabled ? String(req.params.id) : Number(req.params.id);
   const symbol = normalizeSymbol(req.body.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   if (!db.prepare("SELECT symbol FROM stocks WHERE symbol = ?").get(symbol)) {
     return res.status(404).json({ error: "Stock not found. Choose from the NSE search results." });
   }
   ensureDetail(symbol);
+  if (supabaseStore.enabled) {
+    const found = await supabaseStore.addStockToWatchlist(user.id, id, symbol);
+    if (!found) return res.status(404).json({ error: "Watchlist not found" });
+    return res.status(201).json({ ok: true });
+  }
+  const list = db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(id, user.id);
+  if (!list) return res.status(404).json({ error: "Watchlist not found" });
   const nextPosition = db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM watchlist_stocks WHERE watchlist_id = ?").get(id).position;
   db.prepare(`
     INSERT INTO watchlist_stocks (watchlist_id, symbol, position)
     VALUES (?, ?, ?)
     ON CONFLICT(watchlist_id, symbol) DO NOTHING
   `).run(id, symbol, nextPosition);
-  res.status(201).json({ ok: true });
+  return res.status(201).json({ ok: true });
 });
 
-app.delete("/api/watchlists/:id/stocks/:symbol", (req, res) => {
-  const user = requestUser(req, res);
+app.delete("/api/watchlists/:id/stocks/:symbol", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
   const symbol = normalizeSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  if (supabaseStore.enabled) {
+    const found = await supabaseStore.removeStockFromWatchlist(user.id, String(req.params.id), symbol);
+    if (!found) return res.status(404).json({ error: "Watchlist not found" });
+    return res.json({ ok: true });
+  }
   db.prepare("DELETE FROM watchlist_stocks WHERE watchlist_id = ? AND symbol = ?")
     .run(
       db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(Number(req.params.id), user.id)?.id ?? -1,
       symbol
     );
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
-app.patch("/api/watchlists/:id/reorder", (req, res) => {
-  const user = requestUser(req, res);
+app.patch("/api/watchlists/:id/reorder", async (req, res) => {
+  const user = await requestUser(req, res);
   if (!user) return;
-  const id = Number(req.params.id);
+  const id = supabaseStore.enabled ? String(req.params.id) : Number(req.params.id);
+  const symbols = Array.isArray(req.body.symbols) ? req.body.symbols.map(normalizeSymbol).filter(Boolean) : [];
+  if (supabaseStore.enabled) {
+    const found = await supabaseStore.reorderWatchlist(user.id, id, symbols);
+    if (!found) return res.status(404).json({ error: "Watchlist not found" });
+    return res.json({ ok: true });
+  }
   const list = db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(id, user.id);
   if (!list) return res.status(404).json({ error: "Watchlist not found" });
-  const symbols = Array.isArray(req.body.symbols) ? req.body.symbols.map((symbol) => String(symbol).toUpperCase()) : [];
   const update = db.prepare("UPDATE watchlist_stocks SET position = ? WHERE watchlist_id = ? AND symbol = ?");
   symbols.forEach((symbol, index) => update.run(index, id, symbol));
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
 setInterval(async () => {

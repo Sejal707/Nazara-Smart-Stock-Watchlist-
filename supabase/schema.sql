@@ -3,6 +3,7 @@
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
+  handle text,
   display_name text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -39,11 +40,30 @@ create table if not exists public.attention_views (
   primary key (user_id, symbol)
 );
 
+create table if not exists public.stock_access (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  symbol text not null,
+  last_accessed_at timestamptz not null default now(),
+  view_count integer not null default 0,
+  primary key (user_id, symbol)
+);
+
+alter table public.profiles add column if not exists handle text;
+create unique index if not exists profiles_handle_key on public.profiles(handle);
+
 alter table public.profiles enable row level security;
 alter table public.watchlists enable row level security;
 alter table public.watchlist_stocks enable row level security;
 alter table public.user_state enable row level security;
 alter table public.attention_views enable row level security;
+alter table public.stock_access enable row level security;
+
+drop policy if exists "profiles are self-owned" on public.profiles;
+drop policy if exists "watchlists are self-owned" on public.watchlists;
+drop policy if exists "watchlist stocks follow watchlist owner" on public.watchlist_stocks;
+drop policy if exists "user state is self-owned" on public.user_state;
+drop policy if exists "attention views are self-owned" on public.attention_views;
+drop policy if exists "stock access is self-owned" on public.stock_access;
 
 create policy "profiles are self-owned" on public.profiles
   for all using (auth.uid() = id) with check (auth.uid() = id);
@@ -70,4 +90,7 @@ create policy "user state is self-owned" on public.user_state
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy "attention views are self-owned" on public.attention_views
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create policy "stock access is self-owned" on public.stock_access
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

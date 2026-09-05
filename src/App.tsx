@@ -30,7 +30,7 @@ import {
 } from "recharts";
 import { api } from "./api";
 import { clearStoredSession, storedUser } from "./api";
-import type { Bootstrap, MustLookItem, Score, Stock, StockDetail, User, Watchlist, WatchlistStock } from "./types";
+import type { Bootstrap, EntityId, MustLookItem, Score, Stock, StockDetail, User, Watchlist, WatchlistStock } from "./types";
 
 const tabs = ["Overview", "Fundamentals", "Brokerage & Targets", "Concall", "Holdings", "News & Sentiment", "Corporate Actions"] as const;
 type DetailTab = (typeof tabs)[number];
@@ -77,14 +77,14 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => storedUser());
   const [currentView, setCurrentView] = useState<'home' | 'watchlist'>('home');
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<EntityId | null>(null);
   const [selected, setSelected] = useState<StockDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("Overview");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newListName, setNewListName] = useState("");
   const [renameValue, setRenameValue] = useState("");
-  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renamingId, setRenamingId] = useState<EntityId | null>(null);
   const [stockQuery, setStockQuery] = useState("");
   const [stockResults, setStockResults] = useState<Stock[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
