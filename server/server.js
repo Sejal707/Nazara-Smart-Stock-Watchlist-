@@ -11,15 +11,30 @@ import { NseListedEquityAdapter } from "./adapters/listedStocksAdapter.js";
 import { NewsRssAdapter } from "./adapters/newsAdapter.js";
 import { BrokerageRssAdapter } from "./adapters/brokerageAdapter.js";
 import { buildDetail } from "./seedData.js";
+import { config } from "./config.js";
+import { mapPool } from "./market/singleFlight.js";
 
 const app = express();
 const port = process.env.PORT || 8787;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistDir = path.resolve(__dirname, "../dist");
+const symbolPattern = /^[A-Z0-9][A-Z0-9.-]{0,18}$/;
 
 seedAll();
 app.use(cors());
 app.use(express.json());
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  next();
+});
+
+function normalizeSymbol(value) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  const symbol = raw.endsWith(".NS") ? raw : `${raw.replace(/\.NS$/, "")}.NS`;
+  return symbolPattern.test(symbol) ? symbol : null;
+}
 
 function stockFromRow(row) {
   return {
@@ -258,8 +273,8 @@ function ensureDetail(symbol) {
   return freshDetail;
 }
 
-async function refreshSymbol(symbol) {
-  const detail = await marketData.refresh(symbol);
+async function refreshSymbol(symbol, options = {}) {
+  const detail = await marketData.refresh(symbol, options);
   const liveNews = await newsAdapter.latest(detail.stock).catch(() => null);
   if (liveNews?.length) {
     detail.news = liveNews;
@@ -285,8 +300,25 @@ async function refreshSymbol(symbol) {
   return detail;
 }
 
+async function refreshSymbols(symbols, options = {}) {
+  const uniqueSymbols = [...new Set(symbols.map(normalizeSymbol).filter(Boolean))];
+  await mapPool(uniqueSymbols, config.marketDataConcurrency, async (symbol) => {
+    await refreshSymbol(symbol, options).catch(() => null);
+  });
+}
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "Nazara API", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "Nazara API",
+    time: new Date().toISOString(),
+    marketData: {
+      provider: "Yahoo Finance chart API",
+      cacheMs: config.marketDataCacheMs,
+      staleAfterMs: config.marketDataStaleAfterMs,
+      delayedAfterMs: config.marketDataDelayedAfterMs
+    }
+  });
 });
 
 app.post("/api/auth/login", (req, res) => {
@@ -305,11 +337,18 @@ app.get("/api/auth/me", (req, res) => {
   res.json({ user });
 });
 
-app.get("/api/bootstrap", (req, res) => {
+app.get("/api/bootstrap", async (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
   seedWatchlistsForUser(user.id);
   const lastVisitedAt = getUserState(user.id, "lastVisitedAt", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  const watchlistSymbols = db.prepare(`
+    SELECT DISTINCT ws.symbol
+    FROM watchlist_stocks ws
+    JOIN watchlists w ON w.id = ws.watchlist_id
+    WHERE w.user_id = ?
+  `).all(user.id).map((row) => row.symbol);
+  await refreshSymbols(watchlistSymbols, { force: false });
   const watchlists = listWatchlists(user.id);
   const mustLook = mustLookSince(user.id, lastVisitedAt);
   res.json({
@@ -370,10 +409,12 @@ app.post("/api/stocks/sync", async (_req, res) => {
 app.get("/api/stocks/:symbol/history", async (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   const requestedRange = String(req.query.range || "1M").trim().toUpperCase();
   const range = ["1D", "1W", "1M", "3M", "1Y", "5Y"].includes(requestedRange) ? requestedRange : "1M";
   try {
-    const history = await marketData.history(req.params.symbol.toUpperCase(), range);
+    const history = await marketData.history(symbol, range);
     res.json(history);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -383,17 +424,30 @@ app.get("/api/stocks/:symbol/history", async (req, res) => {
 app.get("/api/stocks/:symbol", (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
-  const detail = ensureDetail(req.params.symbol.toUpperCase());
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const detail = ensureDetail(symbol);
   if (!detail) return res.status(404).json({ error: "Stock not found" });
   markStockAccess(user.id, detail.stock.symbol);
   return res.json(detail);
 });
 
+app.get("/api/market/quote/:symbol", async (req, res) => {
+  const user = requestUser(req, res);
+  if (!user) return;
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const quote = await marketData.latestQuote(symbol);
+  res.json(quote);
+});
+
 app.post("/api/refresh/:symbol", async (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   try {
-    const detail = await refreshSymbol(req.params.symbol.toUpperCase());
+    const detail = await refreshSymbol(symbol);
     markStockAccess(user.id, detail.stock.symbol);
     res.json(detail);
   } catch (error) {
@@ -404,7 +458,9 @@ app.post("/api/refresh/:symbol", async (req, res) => {
 app.post("/api/attention/:symbol/viewed", (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
-  const detail = ensureDetail(req.params.symbol.toUpperCase());
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const detail = ensureDetail(symbol);
   if (!detail) return res.status(404).json({ error: "Stock not found" });
   const latestNews = [...(detail.news ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
   const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
@@ -444,7 +500,8 @@ app.post("/api/watchlists/:id/stocks", (req, res) => {
   const id = Number(req.params.id);
   const list = db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(id, user.id);
   if (!list) return res.status(404).json({ error: "Watchlist not found" });
-  const symbol = String(req.body.symbol ?? "").toUpperCase().replace(/\.NS$/, "") + ".NS";
+  const symbol = normalizeSymbol(req.body.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   if (!db.prepare("SELECT symbol FROM stocks WHERE symbol = ?").get(symbol)) {
     return res.status(404).json({ error: "Stock not found. Choose from the NSE search results." });
   }
@@ -461,10 +518,12 @@ app.post("/api/watchlists/:id/stocks", (req, res) => {
 app.delete("/api/watchlists/:id/stocks/:symbol", (req, res) => {
   const user = requestUser(req, res);
   if (!user) return;
+  const symbol = normalizeSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   db.prepare("DELETE FROM watchlist_stocks WHERE watchlist_id = ? AND symbol = ?")
     .run(
       db.prepare("SELECT id FROM watchlists WHERE id = ? AND user_id = ?").get(Number(req.params.id), user.id)?.id ?? -1,
-      req.params.symbol.toUpperCase()
+      symbol
     );
   res.json({ ok: true });
 });
@@ -483,9 +542,7 @@ app.patch("/api/watchlists/:id/reorder", (req, res) => {
 
 setInterval(async () => {
   const rows = db.prepare("SELECT symbol FROM stocks").all();
-  for (const row of rows.slice(0, 4)) {
-    await refreshSymbol(row.symbol).catch(() => null);
-  }
+  await refreshSymbols(rows.slice(0, 4).map((row) => row.symbol), { force: false });
 }, 5 * 60 * 1000);
 
 syncListedStocks({ silent: true }).catch((error) => {

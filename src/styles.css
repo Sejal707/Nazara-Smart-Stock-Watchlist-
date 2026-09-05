@@ -1230,6 +1230,42 @@ h1, h2, h3, strong {
   color: #475569 !important;
 }
 
+.quote-status {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #475569;
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
+.quote-status.live {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.quote-status.delayed,
+.quote-status.pre-market,
+.quote-status.post-market,
+.quote-status.market-closed {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.quote-status.stale,
+.quote-status.unavailable,
+.quote-status.conflict {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
 .live-prices-btn { background: #fee2e2 !important; color: #dc2626 !important; border-color: #fca5a5 !important; }
 
 /* Score Tones (Red/Green themed) */

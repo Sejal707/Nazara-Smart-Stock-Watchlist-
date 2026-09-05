@@ -1,3 +1,8 @@
+import { config } from "../config.js";
+import { nseMarketStatus } from "../market/session.js";
+import { SingleFlight } from "../market/singleFlight.js";
+import { classifyQuote, retainLastKnownQuote } from "../market/quoteValidator.js";
+
 export class DataSourceAdapter {
   constructor(name) {
     this.name = name;
@@ -27,7 +32,11 @@ export class YahooFinanceChartAdapter extends DataSourceAdapter {
 
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${yfRange}&interval=${interval}`;
     const response = await fetch(url, {
-      headers: { "User-Agent": "Nazara hackathon demo" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 Nazara market-data service",
+        "Cache-Control": "no-cache"
+      },
+      cache: "no-store",
       signal: AbortSignal.timeout(4500)
     });
 
@@ -60,8 +69,10 @@ export class YahooFinanceChartAdapter extends DataSourceAdapter {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=5m`;
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Nazara hackathon demo"
+        "User-Agent": "Mozilla/5.0 Nazara market-data service",
+        "Cache-Control": "no-cache"
       },
+      cache: "no-store",
       signal: AbortSignal.timeout(4500)
     });
 
@@ -81,6 +92,10 @@ export class YahooFinanceChartAdapter extends DataSourceAdapter {
     const highs = quote.high.filter((value) => typeof value === "number");
     const volumes = quote.volume.filter((value) => typeof value === "number");
     const timestamps = result.timestamp ?? [];
+    const marketTimestampSeconds = meta.regularMarketTime ?? timestamps.at(-1);
+    if (!marketTimestampSeconds) throw new Error("Yahoo response missing market timestamp");
+    const marketTimestamp = new Date(marketTimestampSeconds * 1000).toISOString();
+    const receivedAt = new Date().toISOString();
     const intraday = timestamps
       .map((timestamp, index) => ({
         time: new Date(timestamp * 1000).toLocaleTimeString("en-IN", {
@@ -94,15 +109,25 @@ export class YahooFinanceChartAdapter extends DataSourceAdapter {
       .filter((point) => typeof point.price === "number")
       .map((point) => ({ ...point, price: Number(point.price.toFixed(2)) }));
 
+    const current = Number((meta.regularMarketPrice ?? prices.at(-1)).toFixed(2));
+    const open = Number((meta.regularMarketOpen ?? opens[0] ?? prices[0]).toFixed(2));
+    const previousClose = Number((meta.chartPreviousClose ?? meta.previousClose ?? prices[0]).toFixed(2));
     return {
-      current: Number((meta.regularMarketPrice ?? prices.at(-1)).toFixed(2)),
-      open: Number((meta.regularMarketOpen ?? opens[0] ?? prices[0]).toFixed(2)),
-      previousClose: Number((meta.chartPreviousClose ?? meta.previousClose ?? prices[0]).toFixed(2)),
+      symbol,
+      exchange: "NSE",
+      price: current,
+      current,
+      open,
+      previousClose,
       low: Number(Math.min(...lows).toFixed(2)),
       high: Number(Math.max(...highs).toFixed(2)),
       volume: volumes.reduce((sum, value) => sum + value, 0),
       intraday,
-      lastUpdated: new Date().toISOString()
+      marketTimestamp,
+      receivedAt,
+      provider: "yahoo",
+      source: this.name,
+      lastUpdated: marketTimestamp
     };
   }
 }
@@ -112,15 +137,80 @@ export class ResilientMarketDataService {
     this.adapter = adapter;
     this.getCachedDetail = getCachedDetail;
     this.saveDetail = saveDetail;
+    this.singleFlight = new SingleFlight();
+    this.quotes = new Map();
   }
 
-  async refresh(symbol) {
+  cachedQuote(symbol) {
+    return this.quotes.get(symbol) ?? null;
+  }
+
+  quoteWithCurrentStatus(quote) {
+    if (!quote) return null;
+    const marketStatus = nseMarketStatus();
+    const refreshed = classifyQuote(quote, null, {
+      staleAfterMs: config.marketDataStaleAfterMs,
+      delayedAfterMs: config.marketDataDelayedAfterMs,
+      marketStatus
+    }).quote;
+    return { ...quote, ...refreshed, error: quote.error };
+  }
+
+  async latestQuote(symbol, { force = false } = {}) {
+    const normalizedSymbol = symbol.toUpperCase();
+    const cached = this.cachedQuote(normalizedSymbol);
+    const receivedTime = cached?.receivedAt ? new Date(cached.receivedAt).getTime() : 0;
+    if (!force && cached && Date.now() - receivedTime < config.marketDataCacheMs) {
+      return this.quoteWithCurrentStatus(cached);
+    }
+
+    return this.singleFlight.do(normalizedSymbol, async () => {
+      const previous = this.cachedQuote(normalizedSymbol);
+      const marketStatus = nseMarketStatus();
+      try {
+        const raw = await this.adapter.quote(normalizedSymbol);
+        const result = classifyQuote(raw, previous, {
+          staleAfterMs: config.marketDataStaleAfterMs,
+          delayedAfterMs: config.marketDataDelayedAfterMs,
+          marketStatus
+        });
+        const next = result.accepted ? result.quote : retainLastKnownQuote(previous, new Error(result.issues.join(", ")), { symbol: normalizedSymbol, marketStatus });
+        this.quotes.set(normalizedSymbol, next);
+        return next;
+      } catch (error) {
+        const retained = retainLastKnownQuote(previous, error, { symbol: normalizedSymbol, marketStatus });
+        this.quotes.set(normalizedSymbol, retained);
+        return retained;
+      }
+    });
+  }
+
+  async refresh(symbol, { force = true } = {}) {
     const cached = this.getCachedDetail(symbol);
     if (!cached) throw new Error(`No cached detail for ${symbol}`);
 
+    const live = await this.latestQuote(symbol, { force });
+    if (!live.price) {
+      const stale = {
+        ...cached,
+        dataQuality: {
+          ...cached.dataQuality,
+          stale: true,
+          label: "unavailable",
+          dataStatus: live.dataStatus,
+          marketStatus: live.marketStatus,
+          marketTimestamp: live.marketTimestamp,
+          receivedAt: live.receivedAt,
+          ageMs: live.ageMs,
+          error: live.error
+        }
+      };
+      this.saveDetail(symbol, stale, true, cached.dataQuality.source);
+      return stale;
+    }
+
     try {
-      const live = await this.adapter.quote(symbol);
-      const { intraday, lastUpdated, ...liveQuote } = live;
+      const { intraday, marketTimestamp, receivedAt, dataStatus, marketStatus, ageMs, stale, delayed, provider, source, error, ...liveQuote } = live;
       const upperCircuitPercent = cached.quote.upperCircuit > cached.quote.open
         ? (cached.quote.upperCircuit / cached.quote.open) - 1
         : 0.1;
@@ -132,13 +222,21 @@ export class ResilientMarketDataService {
       const quote = {
         ...cached.quote,
         ...liveQuote,
+        current: live.price,
         avgVolume: cached.quote.avgVolume,
-        percentFromOpen: Number((((live.current - live.open) / live.open) * 100).toFixed(2)),
+        percentFromOpen: Number((((live.price - live.open) / live.open) * 100).toFixed(2)),
         volumeVsAveragePercent: Number((((live.volume - cached.quote.avgVolume) / cached.quote.avgVolume) * 100).toFixed(1)),
         upperCircuit,
         lowerCircuit,
-        hitUpperCircuit: live.current >= upperCircuit * 0.995,
-        hitLowerCircuit: live.current <= lowerCircuit * 1.005
+        hitUpperCircuit: live.price >= upperCircuit * 0.995,
+        hitLowerCircuit: live.price <= lowerCircuit * 1.005,
+        marketTimestamp,
+        receivedAt,
+        dataStatus,
+        marketStatus,
+        ageMs,
+        delayed,
+        provider
       };
       const updated = {
         ...cached,
@@ -146,13 +244,20 @@ export class ResilientMarketDataService {
         intraday: intraday?.length ? intraday : cached.intraday,
         dataQuality: {
           ...cached.dataQuality,
-          source: this.adapter.name,
-          label: "live/delayed public feed",
-          stale: false,
-          lastUpdated
+          source,
+          label: dataStatus.toLowerCase().replaceAll("_", " "),
+          stale,
+          delayed,
+          dataStatus,
+          marketStatus,
+          marketTimestamp,
+          receivedAt,
+          ageMs,
+          lastUpdated: marketTimestamp,
+          error
         }
       };
-      this.saveDetail(symbol, updated, false, this.adapter.name);
+      this.saveDetail(symbol, updated, stale, source);
       return updated;
     } catch (error) {
       const stale = {
@@ -160,6 +265,7 @@ export class ResilientMarketDataService {
         dataQuality: {
           ...cached.dataQuality,
           stale: true,
+          dataStatus: "STALE",
           label: "stale cached fallback",
           error: error.message
         }

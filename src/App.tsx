@@ -34,6 +34,7 @@ import type { Bootstrap, MustLookItem, Score, Stock, StockDetail, User, Watchlis
 
 const tabs = ["Overview", "Fundamentals", "Brokerage & Targets", "Concall", "Holdings", "News & Sentiment", "Corporate Actions"] as const;
 type DetailTab = (typeof tabs)[number];
+const clientPollIntervalMs = Number(import.meta.env.VITE_CLIENT_POLL_INTERVAL_MS) || 30000;
 
 function currency(value: number) {
   return `Rs ${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -61,6 +62,15 @@ function scoreTone(score: number) {
 
 function labelSign(value: number) {
   return value > 0 ? `+${value.toFixed(1)}` : value.toFixed(1);
+}
+
+function quoteStatus(
+  quote?: { dataStatus?: string; marketTimestamp?: string | null },
+  dataQuality?: { dataStatus?: string; marketTimestamp?: string | null; lastUpdated?: string; stale?: boolean }
+) {
+  const status = quote?.dataStatus ?? dataQuality?.dataStatus ?? (dataQuality?.stale ? "STALE" : "LIVE");
+  const timestamp = quote?.marketTimestamp ?? dataQuality?.marketTimestamp ?? dataQuality?.lastUpdated;
+  return { status, timestamp };
 }
 
 export function App() {
@@ -184,12 +194,12 @@ export function App() {
     const key = `${currentUser?.id ?? "guest"}:${activeWatchlist.id}`;
     if (!autoRefreshedWatchlists.current.has(key)) {
       autoRefreshedWatchlists.current.add(key);
-      refreshActiveWatchlist(true).catch(() => null);
+      refreshVisibleWatchlist().catch(() => null);
     }
 
     const handle = window.setInterval(() => {
-      refreshActiveWatchlist(true).catch(() => null);
-    }, 30000);
+      refreshVisibleWatchlist().catch(() => null);
+    }, clientPollIntervalMs);
 
     return () => window.clearInterval(handle);
   }, [currentUser?.id, activeWatchlist?.id, activeWatchlist?.stocks.length]);
@@ -245,6 +255,21 @@ export function App() {
     } finally {
       setIsAutoRefreshing(false);
       if (!silent) setBusy(false);
+    }
+  }
+
+  async function refreshVisibleWatchlist() {
+    if (!activeWatchlist?.stocks.length || busy) return;
+    try {
+      setIsAutoRefreshing(true);
+      await load();
+      setLastAutoUpdated(new Date().toISOString());
+      if (selected) {
+        const detail = await api.stockDetail(selected.stock.symbol);
+        setSelected(detail);
+      }
+    } finally {
+      setIsAutoRefreshing(false);
     }
   }
 
@@ -624,6 +649,9 @@ function StockCard({
           <strong>{stock.name}</strong>
           <span>{stock.symbol}</span>
         </div>
+        <span className={`quote-status ${quoteStatus(stock.quote, stock.dataQuality).status.toLowerCase().replace("_", "-")}`}>
+          {quoteStatus(stock.quote, stock.dataQuality).status.replace("_", " ")}
+        </span>
       </div>
 
       <div className="price-row">
@@ -729,7 +757,10 @@ function DetailModal({
           <div>
             <span className="eyebrow"><LineChartIcon size={16} /> {detail.stock.exchange} - {detail.stock.sector}</span>
             <h2>{detail.stock.name}</h2>
-            <p>{detail.stock.symbol} - {detail.dataQuality.label} - updated {timeAgo(detail.dataQuality.lastUpdated)}</p>
+            <p>
+              {detail.stock.symbol} - {quoteStatus(detail.quote, detail.dataQuality).status.replace("_", " ")}
+              {quoteStatus(detail.quote, detail.dataQuality).timestamp ? ` - quote ${timeAgo(quoteStatus(detail.quote, detail.dataQuality).timestamp!)}` : ""}
+            </p>
           </div>
           <div className="detail-actions">
             <ScoreBadge score={detail.score} />

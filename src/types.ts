@@ -30,10 +30,13 @@ export type User = {
 
 export type Quote = {
   current: number;
+  price?: number;
   open: number;
   low: number;
   high: number;
   previousClose: number;
+  change?: number;
+  changePercent?: number;
   percentFromOpen: number;
   volume: number;
   avgVolume: number;
@@ -42,6 +45,13 @@ export type Quote = {
   lowerCircuit: number;
   hitUpperCircuit: boolean;
   hitLowerCircuit: boolean;
+  marketTimestamp?: string | null;
+  receivedAt?: string | null;
+  provider?: string;
+  ageMs?: number;
+  dataStatus?: "LIVE" | "DELAYED" | "STALE" | "MARKET_CLOSED" | "PRE_MARKET" | "POST_MARKET" | "UNAVAILABLE" | "CONFLICT";
+  marketStatus?: string;
+  delayed?: boolean;
 };
 
 export type DataQuality = {
@@ -49,6 +59,12 @@ export type DataQuality = {
   label: string;
   stale: boolean;
   lastUpdated: string;
+  dataStatus?: Quote["dataStatus"];
+  marketStatus?: string;
+  marketTimestamp?: string | null;
+  receivedAt?: string | null;
+  ageMs?: number;
+  delayed?: boolean;
   error?: string;
 };
 

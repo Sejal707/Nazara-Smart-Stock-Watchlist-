@@ -32,7 +32,67 @@ Start command: npm start
 Node version: 24+
 ```
 
-Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as a cached fallback.
+Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as cached/stale/unavailable instead of pretending it is live.
+
+## Yahoo Market Data
+
+Yahoo Finance remains the primary market-data provider. NAZARA stores two different timestamps for every quote:
+
+- `marketTimestamp`: the actual timestamp Yahoo attaches to the quote.
+- `receivedAt`: when NAZARA received the Yahoo response.
+
+The app never treats `receivedAt` as proof that the market data is live. Current quote API responses use `Cache-Control: no-store` so browsers and hosting CDNs do not reuse old quote responses as current data.
+
+Freshness is classified as:
+
+- `LIVE`: NSE session is open and Yahoo's market timestamp is within `MARKET_DATA_DELAYED_AFTER_MS`.
+- `DELAYED`: NSE session is open and Yahoo data is fresh enough to use but behind the configured delay threshold.
+- `STALE`: NSE session is open but Yahoo's market timestamp is older than `MARKET_DATA_STALE_AFTER_MS`, or Yahoo failed and only last-known data remains.
+- `MARKET_CLOSED`: NSE is outside normal weekday trading hours, so the last traded Yahoo price is shown truthfully as closed-market data.
+- `UNAVAILABLE`: Yahoo did not return a valid quote and no previous valid quote exists.
+
+The backend validates Yahoo responses before replacing current market state. It rejects malformed prices, invalid OHLC, missing timestamps, and timestamp regressions so older provider responses do not overwrite newer quotes.
+
+## Automatic Updates And Scaling
+
+On login/bootstrap, NAZARA deduplicates the active watchlist symbols and refreshes each unique symbol through the backend before returning watchlist data. While the app is open, the frontend polls the NAZARA backend every `VITE_CLIENT_POLL_INTERVAL_MS` milliseconds, not Yahoo directly.
+
+The backend uses an in-memory single-flight registry and short-lived quote cache:
+
+- 100 users watching `RELIANCE.NS` share one in-flight Yahoo request.
+- cached quote state keeps Yahoo's original `marketTimestamp`.
+- freshness is recalculated when data is served.
+- `MARKET_DATA_CONCURRENCY` controls how many unique symbols refresh at once.
+
+This is scalable for demos and small public deployments without hammering Yahoo. For multi-instance production, move the shared quote cache to Redis so all instances coalesce around one market state.
+
+## Supabase Persistence
+
+SQLite remains the local fallback for development. For production persistence across sessions/devices, create Supabase tables from [supabase/schema.sql](supabase/schema.sql). Supabase is only for user/application state: profiles, watchlists, watchlist stocks, preferences/user state, and attention-view tracking. Yahoo remains the source of market data.
+
+Required Supabase environment variables:
+
+```text
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+Never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code. Keep it server-only.
+
+## Evaluation Requirements
+
+### 1. How does state persist across sessions/devices?
+
+Production state is intended to persist through Supabase Auth plus Supabase PostgreSQL tables for profiles, watchlists, watchlist stocks, user state, and attention views. Local `localStorage` stores only the current browser session token/user shell; it is not the authoritative watchlist store.
+
+### 2. How are stale, delayed, or conflicting data handled?
+
+Yahoo quote responses are normalized into `marketTimestamp` and `receivedAt`. Freshness uses NSE market status, age thresholds, provider lag, validation, and timestamp regression protection. Cached data keeps its original market timestamp, so cached data cannot become `LIVE` merely because it was served just now.
+
+### 3. How does the system scale for larger watchlists and more users?
+
+Watchlist symbols are deduplicated, concurrent refreshes are capped, and duplicate in-flight requests are coalesced with single-flight. Many users watching the same symbol share one backend Yahoo request per refresh window instead of one request per user.
 
 ## Architecture
 
