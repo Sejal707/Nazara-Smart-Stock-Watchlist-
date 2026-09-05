@@ -60,8 +60,11 @@ export const api = {
   stockDetail: (symbol: string) => request<StockDetail>(`/api/stocks/${symbol}`),
   stockHistory: (symbol: string, range: string) => request<{ time: string; date?: string; price: number }[]>(`/api/stocks/${symbol}/history?range=${range}`),
   markVisited: () => request<{ lastVisitedAt: string }>("/api/visit", { method: "POST" }),
-  markAttentionViewed: (symbol: string) =>
-    request<{ ok: boolean; symbol: string; happenedAt: string; viewedAt: string }>(`/api/attention/${symbol}/viewed`, { method: "POST" }),
+  markAttentionViewed: (symbol: string, alertHappenedAt?: string) =>
+    request<{ ok: boolean; symbol: string; happenedAt: string; viewedAt: string }>(`/api/attention/${symbol}/viewed`, {
+      method: "POST",
+      body: JSON.stringify({ alertHappenedAt })
+    }),
   createWatchlist: (name: string) =>
     request("/api/watchlists", { method: "POST", body: JSON.stringify({ name }) }),
   renameWatchlist: (id: EntityId, name: string) =>

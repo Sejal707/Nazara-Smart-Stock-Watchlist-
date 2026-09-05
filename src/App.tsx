@@ -225,7 +225,7 @@ export function App() {
       } : alert)
     } : current);
     const detail = await api.refreshStock(item.symbol).catch(() => api.stockDetail(item.symbol));
-    await api.markAttentionViewed(detail.stock.symbol).catch(() => null);
+    await api.markAttentionViewed(detail.stock.symbol, item.happenedAt).catch(() => null);
     setSelected(detail);
     await load({ refresh: false });
   }
@@ -309,6 +309,8 @@ export function App() {
   }
 
   async function markVisited() {
+    const unviewedItems = bootstrap?.mustLook.filter((item) => !item.viewed) ?? [];
+    await Promise.all(unviewedItems.map((item) => api.markAttentionViewed(item.symbol, item.happenedAt).catch(() => null)));
     await api.markVisited();
     await load({ refresh: false });
   }
@@ -587,7 +589,12 @@ function ShellState({ icon, title, text }: { icon: React.ReactNode; title: strin
 }
 
 function MustLook({ items, onOpen, onMarkVisited }: { items: MustLookItem[]; onOpen: (item: MustLookItem) => void; onMarkVisited: () => void }) {
-  const ranked = [...items].sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 4);
+  const ranked = [...items]
+    .sort((a, b) => {
+      if (a.viewed !== b.viewed) return a.viewed ? 1 : -1;
+      return Math.abs(b.score) - Math.abs(a.score);
+    })
+    .slice(0, 4);
 
   return (
     <section className="must-look">

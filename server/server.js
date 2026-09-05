@@ -177,6 +177,58 @@ function attentionViewFor(cache, userId, symbol) {
   return userStore.getAttentionView(userId, symbol);
 }
 
+function isAttentionViewed(attentionView, happenedAt) {
+  if (!attentionView) return false;
+  const happenedTime = new Date(happenedAt).getTime();
+  const storedAlertTime = new Date(attentionView.alertHappenedAt).getTime();
+  const viewedTime = new Date(attentionView.viewedAt).getTime();
+  if (!Number.isFinite(happenedTime)) return true;
+  const graceMs = 2000;
+  return (Number.isFinite(storedAlertTime) && storedAlertTime + graceMs >= happenedTime) ||
+    (Number.isFinite(viewedTime) && viewedTime + graceMs >= happenedTime);
+}
+
+function parseReasons(value) {
+  if (Array.isArray(value)) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return [];
+  }
+}
+
+function hasMeaningfulEvent(score, reasons = []) {
+  return Math.abs(score) >= 35 ||
+    reasons.some((reason) => Math.abs(Number(reason.points) || 0) >= 8) ||
+    reasons.some((reason) => ["freshNews", "brokerage", "circuit"].includes(reason.key));
+}
+
+function mergeAttentionItems(items) {
+  const bySymbol = new Map();
+  for (const item of items) {
+    if (!hasMeaningfulEvent(item.score, item.reasons)) continue;
+    const existing = bySymbol.get(item.symbol);
+    if (!existing) {
+      bySymbol.set(item.symbol, item);
+      continue;
+    }
+    const nextWins =
+      (existing.viewed && !item.viewed) ||
+      (existing.viewed === item.viewed && Math.abs(item.score) > Math.abs(existing.score)) ||
+      (existing.viewed === item.viewed &&
+        Math.abs(item.score) === Math.abs(existing.score) &&
+        new Date(item.happenedAt).getTime() > new Date(existing.happenedAt).getTime());
+    if (nextWins) bySymbol.set(item.symbol, item);
+  }
+
+  return [...bySymbol.values()]
+    .sort((a, b) => {
+      if (a.viewed !== b.viewed) return a.viewed ? 1 : -1;
+      return Math.abs(b.score) - Math.abs(a.score);
+    })
+    .slice(0, 10);
+}
+
 async function mustLookSince(userId, lastVisitedAt, existingSymbols = null, attentionCache = null) {
   let rows;
   if (supabaseStore.enabled) {
@@ -206,7 +258,9 @@ async function mustLookSince(userId, lastVisitedAt, existingSymbols = null, atte
   const items = [];
   for (const row of rows) {
     const attentionView = await attentionViewFor(attentionCache, userId, row.symbol);
-    const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(row.happened_at) : false;
+    const viewed = isAttentionViewed(attentionView, row.happened_at);
+    const reasons = parseReasons(row.reasons);
+    if (!hasMeaningfulEvent(row.impact, reasons)) continue;
     items.push({
       id: row.id,
       symbol: row.symbol,
@@ -215,7 +269,7 @@ async function mustLookSince(userId, lastVisitedAt, existingSymbols = null, atte
       eventType: row.event_type,
       headline: row.headline,
       score: row.impact,
-      reasons: JSON.parse(row.reasons),
+      reasons,
       happenedAt: row.happened_at,
       viewed,
       lastViewedAt: attentionView?.viewedAt ?? null
@@ -231,6 +285,13 @@ function latestTimestamp(...values) {
     .filter(Number.isFinite);
   if (!times.length) return new Date().toISOString();
   return new Date(Math.max(...times)).toISOString();
+}
+
+function attentionTimestamp(...values) {
+  const time = new Date(latestTimestamp(...values)).getTime();
+  if (!Number.isFinite(time)) return new Date().toISOString();
+  const bucketMs = 5 * 60 * 1000;
+  return new Date(Math.floor(time / bucketMs) * bucketMs).toISOString();
 }
 
 async function attentionFeed(userId, lastVisitedAt, existingSymbols = null, existingAccessedRows = null, attentionCache = null) {
@@ -254,17 +315,22 @@ async function attentionFeed(userId, lastVisitedAt, existingSymbols = null, exis
     const latestNews = [...(detail.news ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
     const freshNews = latestNews && new Date(latestNews.date) > new Date(lastSeenForStock);
     const freshBrokerage = detail.brokerage && new Date(detail.brokerage.lastUpdated) > new Date(lastSeenForStock);
-    const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
+    const happenedAt = attentionTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
     const attentionView = await attentionViewFor(attentionCache, userId, row.symbol);
-    const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(happenedAt) : false;
-    const reasons = detail.score.breakdown
+    const viewed = isAttentionViewed(attentionView, happenedAt);
+    const significantReasons = detail.score.breakdown
       .filter((reason) => Math.abs(reason.points) >= 4)
       .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
       .slice(0, 3);
+    const importantReasons = significantReasons.filter((reason) => Math.abs(reason.points) >= 8);
+    const hasPriceTrigger = Math.abs(detail.quote?.percentFromOpen ?? 0) >= 2;
+    const hasVolumeTrigger = Math.abs(detail.quote?.volumeVsAveragePercent ?? 0) >= 50;
+    const hasCircuitTrigger = Boolean(detail.quote?.hitUpperCircuit || detail.quote?.hitLowerCircuit);
+    const hasScoreTrigger = hasMeaningfulEvent(detail.score.score, importantReasons);
 
-    if (Math.abs(detail.score.score) >= 25 || Math.abs(delta) >= 8 || freshNews || freshBrokerage) {
+    if (hasScoreTrigger || Math.abs(delta) >= 8 || freshNews || freshBrokerage || hasPriceTrigger || hasVolumeTrigger || hasCircuitTrigger) {
       const extraReasons = [
-        ...reasons,
+        ...significantReasons,
         ...(freshNews ? [{ key: "freshNews", label: "Fresh news", points: 6, reason: latestNews.title }] : []),
         ...(freshBrokerage ? [{ key: "brokerage", label: "Brokerage target", points: detail.brokerage.upsidePercent ?? 4, reason: detail.brokerage.summary }] : [])
       ].slice(0, 4);
@@ -284,7 +350,7 @@ async function attentionFeed(userId, lastVisitedAt, existingSymbols = null, exis
     }
   }
 
-  return items.sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, 10);
+  return mergeAttentionItems(items);
 }
 
 const marketData = new ResilientMarketDataService({
@@ -460,9 +526,7 @@ app.get("/api/bootstrap", async (req, res) => {
     watchlists,
     stocks: getStocks({ limit: 120 }),
     stockUniverseCount: db.prepare("SELECT COUNT(*) AS count FROM stocks").get().count,
-    mustLook: [...feed, ...mustLook]
-      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
-      .slice(0, 10),
+    mustLook: mergeAttentionItems([...feed, ...mustLook]),
     lastVisitedAt,
     accessedStocks,
     dataSources: [
@@ -560,7 +624,12 @@ app.post("/api/attention/:symbol/viewed", async (req, res) => {
   const detail = ensureDetail(symbol);
   if (!detail) return res.status(404).json({ error: "Stock not found" });
   const latestNews = [...(detail.news ?? [])].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-  const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
+  const happenedAt = attentionTimestamp(
+    req.body?.alertHappenedAt,
+    detail.dataQuality.lastUpdated,
+    latestNews?.date,
+    detail.brokerage?.lastUpdated
+  );
   const viewedAt = await userStore.markAttentionViewed(user.id, detail.stock.symbol, happenedAt);
   res.json({ ok: true, symbol: detail.stock.symbol, happenedAt, viewedAt });
 });
