@@ -382,6 +382,10 @@ app.get("/api/health", (_req, res) => {
       cacheMs: config.marketDataCacheMs,
       staleAfterMs: config.marketDataStaleAfterMs,
       delayedAfterMs: config.marketDataDelayedAfterMs
+    },
+    persistence: {
+      mode: supabaseStore.enabled ? "supabase" : "sqlite",
+      supabaseConfigured: supabaseStore.enabled
     }
   });
 });
