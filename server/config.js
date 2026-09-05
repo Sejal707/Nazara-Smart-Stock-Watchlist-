@@ -18,9 +18,11 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-function numberEnv(name, fallback) {
+function numberEnv(name, fallback, { allowZero = false } = {}) {
   const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (!Number.isFinite(value)) return fallback;
+  if (allowZero && value === 0) return 0;
+  return value > 0 ? value : fallback;
 }
 
 const supabaseUrl = process.env.SUPABASE_URL?.trim() ?? "";
@@ -30,7 +32,7 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? 
 export const config = {
   marketDataStaleAfterMs: numberEnv("MARKET_DATA_STALE_AFTER_MS", 2 * 60 * 1000),
   marketDataDelayedAfterMs: numberEnv("MARKET_DATA_DELAYED_AFTER_MS", 20 * 1000),
-  marketDataCacheMs: numberEnv("MARKET_DATA_CACHE_MS", 15 * 1000),
+  marketDataCacheMs: numberEnv("MARKET_DATA_CACHE_MS", 15 * 1000, { allowZero: true }),
   marketDataConcurrency: Math.max(1, Math.min(numberEnv("MARKET_DATA_CONCURRENCY", 3), 8)),
   supabase: {
     enabled: Boolean(supabaseUrl && supabaseAnonKey && supabaseServiceRoleKey),

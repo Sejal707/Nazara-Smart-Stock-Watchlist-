@@ -160,7 +160,7 @@ export class ResilientMarketDataService {
     const normalizedSymbol = symbol.toUpperCase();
     const cached = this.cachedQuote(normalizedSymbol);
     const receivedTime = cached?.receivedAt ? new Date(cached.receivedAt).getTime() : 0;
-    if (!force && cached && Date.now() - receivedTime < config.marketDataCacheMs) {
+    if (!force && config.marketDataCacheMs > 0 && cached && Date.now() - receivedTime < config.marketDataCacheMs) {
       return this.quoteWithCurrentStatus(cached);
     }
 

@@ -38,7 +38,7 @@ Add these Vercel environment variables before deploying:
 ```text
 MARKET_DATA_STALE_AFTER_MS=120000
 MARKET_DATA_DELAYED_AFTER_MS=20000
-MARKET_DATA_CACHE_MS=15000
+MARKET_DATA_CACHE_MS=0
 MARKET_DATA_CONCURRENCY=3
 VITE_CLIENT_POLL_INTERVAL_MS=30000
 SUPABASE_URL=
@@ -48,6 +48,8 @@ OPENAI_API_KEY=
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` must stay server-only. Do not expose it in browser code.
+
+Set `MARKET_DATA_CACHE_MS=0` on Vercel if you want Nazara to request Yahoo on every quote refresh instead of reusing the backend's short quote cache. This still cannot force Yahoo to provide exchange-grade real-time data; Yahoo may return delayed or last-traded market timestamps, and Nazara will label that truthfully.
 
 Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as cached/stale/unavailable instead of pretending it is live.
 
@@ -74,12 +76,13 @@ The backend validates Yahoo responses before replacing current market state. It 
 
 On login/bootstrap, NAZARA deduplicates the active watchlist symbols and refreshes each unique symbol through the backend before returning watchlist data. While the app is open, the frontend polls the NAZARA backend every `VITE_CLIENT_POLL_INTERVAL_MS` milliseconds, not Yahoo directly.
 
-The backend uses an in-memory single-flight registry and short-lived quote cache:
+The backend uses an in-memory single-flight registry and optional short-lived quote cache:
 
 - 100 users watching `RELIANCE.NS` share one in-flight Yahoo request.
 - cached quote state keeps Yahoo's original `marketTimestamp`.
 - freshness is recalculated when data is served.
 - `MARKET_DATA_CONCURRENCY` controls how many unique symbols refresh at once.
+- `MARKET_DATA_CACHE_MS=0` disables backend quote-cache reuse.
 
 This is scalable for demos and small public deployments without hammering Yahoo. On Vercel, in-memory cache can reset on cold starts because serverless functions are not one permanent machine. For high traffic, add Redis/Upstash so all serverless instances share one quote cache.
 
