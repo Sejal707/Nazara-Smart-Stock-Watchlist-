@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const dataDir = path.resolve(__dirname, "../data");
+export const dataDir = process.env.VERCEL ? path.join(os.tmpdir(), "nazara") : path.resolve(__dirname, "../data");
 export const dbPath = process.env.DATABASE_PATH || path.join(dataDir, "nazara.sqlite");
 
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });

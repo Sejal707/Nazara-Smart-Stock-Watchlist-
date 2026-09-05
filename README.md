@@ -19,18 +19,35 @@ To reseed the database:
 npm run seed
 ```
 
-## Deploy Live
+## Deploy On Vercel
 
-Deploy this as one Node web service, not as a static-only site. The Express server serves both the API and the built React frontend.
+Vercel can host Nazara as a Vite frontend plus an Express serverless API. It is not unlimited: Hobby accounts have included request/function/CPU quotas, and Yahoo can still rate-limit public market-data traffic. Nazara reduces unnecessary requests with backend quote caching, request coalescing, and truthful `LIVE`/`DELAYED`/`STALE`/`MARKET_CLOSED` labels.
 
-Recommended Koyeb settings:
+Required Vercel project settings:
 
 ```text
 Repository: https://github.com/Sejal707/Nazara-Smart-Stock-Watchlist-
-Build command: npm install && npm run build
-Start command: npm start
-Node version: 24+
+Framework preset: Vite
+Build command: npm run build
+Output directory: dist
+Node version: 24.x
 ```
+
+Add these Vercel environment variables before deploying:
+
+```text
+MARKET_DATA_STALE_AFTER_MS=120000
+MARKET_DATA_DELAYED_AFTER_MS=20000
+MARKET_DATA_CACHE_MS=15000
+MARKET_DATA_CONCURRENCY=3
+VITE_CLIENT_POLL_INTERVAL_MS=30000
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENAI_API_KEY=
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` must stay server-only. Do not expose it in browser code.
 
 Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as cached/stale/unavailable instead of pretending it is live.
 
@@ -64,11 +81,11 @@ The backend uses an in-memory single-flight registry and short-lived quote cache
 - freshness is recalculated when data is served.
 - `MARKET_DATA_CONCURRENCY` controls how many unique symbols refresh at once.
 
-This is scalable for demos and small public deployments without hammering Yahoo. For multi-instance production, move the shared quote cache to Redis so all instances coalesce around one market state.
+This is scalable for demos and small public deployments without hammering Yahoo. On Vercel, in-memory cache can reset on cold starts because serverless functions are not one permanent machine. For high traffic, add Redis/Upstash so all serverless instances share one quote cache.
 
 ## Supabase Persistence
 
-SQLite remains the local fallback for development. For production persistence across sessions/devices, create Supabase tables from [supabase/schema.sql](supabase/schema.sql). Supabase is only for user/application state: profiles, watchlists, watchlist stocks, preferences/user state, and attention-view tracking. Yahoo remains the source of market data.
+SQLite remains the local fallback for development and an ephemeral stock/detail cache on Vercel. For production persistence across sessions/devices, create Supabase tables from [supabase/schema.sql](supabase/schema.sql). Supabase is only for user/application state: profiles, watchlists, watchlist stocks, preferences/user state, stock access, and attention-view tracking. Yahoo remains the source of market data.
 
 Required Supabase environment variables:
 
@@ -102,7 +119,9 @@ React + Recharts UI
         v
 Express API (/api/*)
         |
-        +--> SQLite (users, watchlists, stock details, scores, events, user state)
+        +--> Supabase Auth/Postgres (production users, watchlists, user state)
+        |
+        +--> SQLite/temp SQLite (local fallback, stock details, scores, events)
         |
         +--> DataSourceAdapter interface
               |

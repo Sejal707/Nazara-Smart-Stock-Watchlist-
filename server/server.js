@@ -641,16 +641,18 @@ app.patch("/api/watchlists/:id/reorder", async (req, res) => {
   return res.json({ ok: true });
 });
 
-setInterval(async () => {
-  const rows = db.prepare("SELECT symbol FROM stocks").all();
-  await refreshSymbols(rows.slice(0, 4).map((row) => row.symbol), { force: false });
-}, 5 * 60 * 1000);
+if (!process.env.VERCEL) {
+  setInterval(async () => {
+    const rows = db.prepare("SELECT symbol FROM stocks").all();
+    await refreshSymbols(rows.slice(0, 4).map((row) => row.symbol), { force: false });
+  }, 5 * 60 * 1000);
+}
 
 syncListedStocks({ silent: true }).catch((error) => {
   console.warn(`NSE symbol auto-sync skipped: ${error.message}`);
 });
 
-if (fs.existsSync(clientDistDir)) {
+if (!process.env.VERCEL && fs.existsSync(clientDistDir)) {
   app.use(express.static(clientDistDir));
   app.get("/{*path}", (req, res, next) => {
     if (req.path.startsWith("/api/")) return next();
@@ -658,6 +660,10 @@ if (fs.existsSync(clientDistDir)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`Nazara server listening on http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Nazara server listening on http://localhost:${port}`);
+  });
+}
+
+export default app;
