@@ -1,41 +1,348 @@
-# Nazara
+# Nazara - Smart Stock Watchlist
 
-Nazara ("bird's-eye view") is a hackathon-ready stock watchlist dashboard for NSE-listed stocks. It ships with a working Express backend, SQLite persistence, a React dashboard, a deterministic scoring engine, and seeded offline-safe market intelligence so demos keep working even when external APIs are unavailable.
+Nazara is a bird's-eye stock watchlist platform for NSE investors. It is built to answer one simple question:
+
+> Which stocks in my watchlist actually need my attention right now?
+
+Instead of showing only a flat list of prices, Nazara combines live/delayed Yahoo Finance market data, watchlist activity, news, brokerage-target headlines, quarterly review signals, and a scoring engine to rank stocks by importance.
+
+[Live Site](https://nazara-smart-stock-watchlist.vercel.app/)
+
+---
+
+## Aim
+
+Most investors track many stocks but do not want to manually refresh every company, open multiple tabs, compare price movement, scan news, check brokerage targets, and remember what they reviewed last time.
+
+Nazara aims to become a clean, personal stock command center:
+
+- every user gets their own login and watchlists
+- each user starts with a pre-added starter watchlist
+- NSE stocks can be searched and added quickly
+- prices update automatically from Yahoo Finance
+- high-attention stocks are ranked first
+- reviewed alerts stay reviewed until a newer important update appears
+- data quality is clearly labelled as `LIVE`, `DELAYED`, `MARKET_CLOSED`, `STALE`, or `UNAVAILABLE`
+
+---
+
+## Core Features
+
+### 1. User Login And Saved Watchlists
+
+Users can log in with a username and password. Each user gets separate watchlists, reviewed-alert status, stock access history, and app state.
+
+Production persistence uses Supabase Auth and Supabase Postgres. Local development can fall back to SQLite.
+
+### 2. Multiple Watchlists
+
+Nazara supports multiple named watchlists per user:
+
+- create new watchlists
+- rename only when needed
+- delete custom watchlists
+- add NSE stocks from search
+- remove stocks
+- reorder stocks
+- every new user gets one pre-filled `Starter Watchlist`
+
+### 3. NSE Stock Search
+
+The search is designed for fast watchlist building:
+
+- automatic matching while typing
+- NSE-focused search
+- no need to manually type `.NS`
+- clicking a result adds the stock directly
+- existing stocks in the watchlist are filtered out
+
+### 4. Yahoo Finance Price Data
+
+Market prices and historical charts come from Yahoo Finance chart endpoints through the backend.
+
+Nazara stores two timestamps for every quote:
+
+- `marketTimestamp`: the timestamp Yahoo gives for the actual market quote
+- `receivedAt`: the time Nazara received the Yahoo response
+
+This prevents old data from being shown as fake live data.
+
+### 5. Price History Charts
+
+Each stock has a price history chart with multiple ranges:
+
+- `1D`
+- `1W`
+- `1M`
+- `3M`
+- `1Y`
+- `5Y`
+
+These charts use real Yahoo Finance historical data when available.
+
+### 6. High Attention Stocks
+
+The home screen focuses on stocks that actually need review. A stock enters this section only when it has a meaningful trigger such as:
+
+- strong positive or negative score
+- major score movement since last view
+- fresh important news
+- brokerage target update
+- unusual volume
+- significant price move
+- circuit-related signal
+
+The feed is deduped by stock symbol, so the same stock does not appear twice. Unreviewed alerts appear before reviewed ones.
+
+### 7. Needs Review / Reviewed Logic
+
+Each high-attention stock can show:
+
+- `Needs review`: you have not checked the latest important update
+- `Viewed`: you already opened or marked that alert
+
+If a stock gets a newer important update later, it automatically becomes `Needs review` again.
+
+### 8. Stock Deep Dive
+
+Every stock card opens a detailed view with:
+
+- price chart
+- score breakdown
+- fundamentals
+- quarterly review with QoQ data
+- brokerage and target-price section
+- concall summary
+- holdings
+- news and sentiment
+- corporate actions
+
+### 9. Brokerage And Target Price Summary
+
+Nazara tracks public brokerage-target headlines and summarizes the latest available target-price context for a stock.
+
+It does not scrape paid reports. It works with public headline/news sources only.
+
+### 10. News And Sentiment
+
+Company news is pulled from public RSS/news search sources. The app highlights relevant headlines and uses them in the attention score where applicable.
+
+### 11. Clean UI
+
+The UI is intentionally focused:
+
+- no unnecessary source cards at the bottom
+- no permanently open rename controls
+- no noisy live-feed block under every stock
+- compact stock cards
+- direct add-from-search behavior
+- simple live status chips
+- uncluttered stock detail tabs
+
+---
+
+## UI And Animations
+
+Nazara includes subtle interaction polish:
+
+- loading spinner while data is being prepared
+- pulsing dot in the high-attention header
+- hover transitions on stock cards
+- active tab transitions
+- status chips for quote freshness
+- smooth chart rendering through Recharts
+- clean modal interactions for stock details
+
+The goal is to make the app feel alive without making the finance workflow noisy.
+
+---
+
+## Data Quality Model
+
+Nazara does not pretend every response is real-time. It labels data honestly:
+
+| Status | Meaning |
+|---|---|
+| `LIVE` | NSE is open and Yahoo's market timestamp is fresh |
+| `DELAYED` | NSE is open but Yahoo's quote is behind the configured delay threshold |
+| `MARKET_CLOSED` | NSE is closed, so the latest traded price is shown |
+| `STALE` | Yahoo did not provide fresh data and last-known data is being used |
+| `UNAVAILABLE` | Yahoo did not return a usable quote |
+| `CONFLICT` | A provider response looked older or inconsistent and was rejected |
+
+Browser/API responses use no-store headers, and Yahoo fetches are requested with no-store behavior.
+
+---
+
+## High Attention Scoring
+
+Each stock receives a score from `-100` to `+100`.
+
+The score is calculated from:
+
+| Signal | Purpose |
+|---|---|
+| Price movement | Detects meaningful movement from open |
+| Volume vs average | Finds unusual participation |
+| Quarterly earnings surprise | Captures results vs expectation |
+| News sentiment | Adds recent market/news context |
+| Technical indicators | Adds momentum and moving-average context |
+| Analyst rating change | Tracks upgrade/downgrade/initiation signals |
+| Corporate action | Includes dividend, split, buyback, block deal, fundraise style signals |
+| User-specific event | Tracks watchlist-specific triggers |
+
+Score labels:
+
+| Score Range | Label |
+|---|---|
+| `80` to `100` | Exceptional Positive |
+| `40` to `79` | Strong Positive |
+| `10` to `39` | Mild Positive |
+| `-9` to `9` | Neutral / No Meaningful Change |
+| `-39` to `-10` | Mild Negative |
+| `-79` to `-40` | Strong Negative |
+| `-100` to `-80` | Critical Negative |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, TypeScript, Vite |
+| Charts | Recharts |
+| Icons | Lucide React |
+| Styling | Custom CSS |
+| Backend | Node.js, Express |
+| Local database | SQLite via `node:sqlite` |
+| Production persistence | Supabase Auth + Supabase Postgres |
+| Market data | Yahoo Finance chart API |
+| News | Google News RSS-style public feed adapter |
+| Deployment | Vercel serverless functions |
+| Tests | Node test runner |
+
+---
+
+## Architecture
+
+```text
+Browser
+  |
+  | React + Vite UI
+  |
+  v
+Express API on Vercel
+  |
+  +-- Supabase Auth/Postgres
+  |     - users
+  |     - profiles
+  |     - watchlists
+  |     - watchlist stocks
+  |     - reviewed attention alerts
+  |     - stock access state
+  |
+  +-- SQLite/temp SQLite
+  |     - local dev fallback
+  |     - seeded stock details
+  |     - score snapshots
+  |     - fallback stock intelligence
+  |
+  +-- Yahoo Finance adapter
+  |     - quote data
+  |     - OHLC
+  |     - intraday points
+  |     - historical chart ranges
+  |
+  +-- News/Brokerage adapters
+        - latest public headlines
+        - brokerage target summaries
+```
+
+---
+
+## Project Structure
+
+```text
+nazara/
+  api/
+    index.js
+    [...path].js
+  config/
+    scoringConfig.json
+    tickers.json
+  server/
+    adapters/
+      brokerageAdapter.js
+      listedStocksAdapter.js
+      marketDataAdapter.js
+      newsAdapter.js
+    market/
+      quoteValidator.js
+      session.js
+      singleFlight.js
+    config.js
+    db.js
+    scoringEngine.js
+    seed.js
+    seedData.js
+    server.js
+    supabaseStore.js
+  src/
+    App.tsx
+    api.ts
+    main.tsx
+    styles.css
+    types.ts
+    vite-env.d.ts
+  supabase/
+    schema.sql
+  tests/
+    quoteValidator.test.js
+    singleFlight.test.js
+  index.html
+  package.json
+  vercel.json
+```
+
+---
 
 ## Run Locally
 
-```bash
-npm install
-npm run dev
+Use `npm.cmd` on Windows PowerShell.
+
+```powershell
+cd "C:\Users\Sejal Sharma\OneDrive\Desktop\nazara"
+npm.cmd install
+npm.cmd run dev
 ```
 
-Open `http://localhost:5173`. The API runs on `http://localhost:8787`.
-
-The first screen is a login page. Enter a name and password; Nazara creates or resumes that user and keeps that user's watchlists, last-accessed stocks, last visit time, and attention feed separate in SQLite. The built-in demo user keeps the seeded demo watchlists; every other new user starts with one pre-added `Starter Watchlist`.
-
-To reseed the database:
-
-```bash
-npm run seed
-```
-
-## Deploy On Vercel
-
-Vercel can host Nazara as a Vite frontend plus an Express serverless API. It is not unlimited: Hobby accounts have included request/function/CPU quotas, and Yahoo can still rate-limit public market-data traffic. Nazara reduces unnecessary requests with backend quote caching, request coalescing, and truthful `LIVE`/`DELAYED`/`STALE`/`MARKET_CLOSED` labels.
-
-Required Vercel project settings:
+Open:
 
 ```text
-Repository: https://github.com/Sejal707/Nazara-Smart-Stock-Watchlist-
-Framework preset: Vite
-Build command: npm run build
-Output directory: dist
-Node version: 24.x
+http://localhost:5173
 ```
 
-Add these Vercel environment variables before deploying:
+For production-style local run:
+
+```powershell
+npm.cmd run build
+npm.cmd start
+```
+
+Open:
 
 ```text
+http://localhost:8787
+```
+
+---
+
+## Environment Variables
+
+Local `.env` is optional for SQLite-only development. Supabase is required for production user persistence.
+
+```env
+PORT=8787
 MARKET_DATA_STALE_AFTER_MS=120000
 MARKET_DATA_DELAYED_AFTER_MS=20000
 MARKET_DATA_CACHE_MS=0
@@ -47,126 +354,134 @@ SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` must stay server-only. Do not expose it in browser code.
-
-Set `MARKET_DATA_CACHE_MS=0` on Vercel if you want Nazara to request Yahoo on every quote refresh instead of reusing the backend's short quote cache. This still cannot force Yahoo to provide exchange-grade real-time data; Yahoo may return delayed or last-traded market timestamps, and Nazara will label that truthfully.
-
-Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as cached/stale/unavailable instead of pretending it is live.
-
-## Yahoo Market Data
-
-Yahoo Finance remains the primary market-data provider. NAZARA stores two different timestamps for every quote:
-
-- `marketTimestamp`: the actual timestamp Yahoo attaches to the quote.
-- `receivedAt`: when NAZARA received the Yahoo response.
-
-The app never treats `receivedAt` as proof that the market data is live. Current quote API responses use `Cache-Control: no-store` so browsers and hosting CDNs do not reuse old quote responses as current data.
-
-Freshness is classified as:
-
-- `LIVE`: NSE session is open and Yahoo's market timestamp is within `MARKET_DATA_DELAYED_AFTER_MS`.
-- `DELAYED`: NSE session is open and Yahoo data is fresh enough to use but behind the configured delay threshold.
-- `STALE`: NSE session is open but Yahoo's market timestamp is older than `MARKET_DATA_STALE_AFTER_MS`, or Yahoo failed and only last-known data remains.
-- `MARKET_CLOSED`: NSE is outside normal weekday trading hours, so the last traded Yahoo price is shown truthfully as closed-market data.
-- `UNAVAILABLE`: Yahoo did not return a valid quote and no previous valid quote exists.
-
-The backend validates Yahoo responses before replacing current market state. It rejects malformed prices, invalid OHLC, missing timestamps, and timestamp regressions so older provider responses do not overwrite newer quotes.
-
-## Automatic Updates And Scaling
-
-On login/bootstrap, NAZARA deduplicates the active watchlist symbols and refreshes each unique symbol through the backend before returning watchlist data. While the app is open, the frontend polls the NAZARA backend every `VITE_CLIENT_POLL_INTERVAL_MS` milliseconds, not Yahoo directly.
-
-The backend uses an in-memory single-flight registry and optional short-lived quote cache:
-
-- 100 users watching `RELIANCE.NS` share one in-flight Yahoo request.
-- cached quote state keeps Yahoo's original `marketTimestamp`.
-- freshness is recalculated when data is served.
-- `MARKET_DATA_CONCURRENCY` controls how many unique symbols refresh at once.
-- `MARKET_DATA_CACHE_MS=0` disables backend quote-cache reuse.
-
-This is scalable for demos and small public deployments without hammering Yahoo. On Vercel, in-memory cache can reset on cold starts because serverless functions are not one permanent machine. For high traffic, add Redis/Upstash so all serverless instances share one quote cache.
-
-## Supabase Persistence
-
-SQLite remains the local fallback for development and an ephemeral stock/detail cache on Vercel. For production persistence across sessions/devices, create Supabase tables from [supabase/schema.sql](supabase/schema.sql). Supabase is only for user/application state: profiles, watchlists, watchlist stocks, preferences/user state, stock access, and attention-view tracking. Yahoo remains the source of market data.
-
-Required Supabase environment variables:
+For Vercel, set these in:
 
 ```text
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+Vercel > Project > Settings > Environment Variables
 ```
 
-Never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code. Keep it server-only.
+Do not commit real keys. `.env` is ignored by Git.
 
-## Evaluation Requirements
+---
 
-### 1. How does state persist across sessions/devices?
+## Supabase Setup
 
-Production state is intended to persist through Supabase Auth plus Supabase PostgreSQL tables for profiles, watchlists, watchlist stocks, user state, and attention views. Local `localStorage` stores only the current browser session token/user shell; it is not the authoritative watchlist store.
-
-### 2. How are stale, delayed, or conflicting data handled?
-
-Yahoo quote responses are normalized into `marketTimestamp` and `receivedAt`. Freshness uses NSE market status, age thresholds, provider lag, validation, and timestamp regression protection. Cached data keeps its original market timestamp, so cached data cannot become `LIVE` merely because it was served just now.
-
-### 3. How does the system scale for larger watchlists and more users?
-
-Watchlist symbols are deduplicated, concurrent refreshes are capped, and duplicate in-flight requests are coalesced with single-flight. Many users watching the same symbol share one backend Yahoo request per refresh window instead of one request per user.
-
-## Architecture
+1. Create a Supabase project.
+2. Open `SQL Editor`.
+3. Paste and run:
 
 ```text
-React + Recharts UI
-        |
-        v
-Express API (/api/*)
-        |
-        +--> Supabase Auth/Postgres (production users, watchlists, user state)
-        |
-        +--> SQLite/temp SQLite (local fallback, stock details, scores, events)
-        |
-        +--> DataSourceAdapter interface
-              |
-              +--> YahooFinanceChartAdapter (auto-polled live/delayed price data)
-              +--> NseListedEquityAdapter (searchable NSE stock universe)
-              +--> NewsRssAdapter (latest company/sector headlines)
-              +--> BrokerageRssAdapter (foreign brokerage target headlines)
-              +--> Seed cache fallback (earnings, concall, holdings, actions)
+supabase/schema.sql
 ```
 
-The frontend never calls external market APIs directly. The backend owns login state, polling, caching, stale flags, scoring, and per-user watchlist state.
+4. Add these keys to Vercel:
 
-## Data Sources And Limitations
+```env
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
 
-- Price/OHLC/intraday/history: best-effort Yahoo Finance chart endpoint through a swappable adapter. Public data can be delayed or blocked, so Nazara auto-polls the active watchlist every 30 seconds, loads real chart history for 1D, 1W, 1M, 3M, 1Y, and 5Y ranges, and serves cached values when live calls fail.
-- Listed stocks: NSE `EQUITY_L.csv` securities list. Nazara syncs the searchable NSE universe automatically on API startup; the last successful sync remains in SQLite.
-- News: Google News RSS search per company/sector, with source links retained in the News & Sentiment tab. Reliance/Jio IPO news is queried with a Jio-specific search so important subsidiary events are attached to Reliance.
-- Foreign brokerage targets: Google News RSS search for public headlines mentioning foreign brokerages such as Jefferies, Morgan Stanley, Goldman Sachs, JPMorgan, Nomura, Citi, UBS, CLSA, HSBC, Bernstein, Macquarie, and BofA. Nazara extracts target prices from headlines when visible and clearly labels missing targets. Full paid/private brokerage reports are not scraped.
-- Earnings, concall summaries, holdings, corporate actions, block deals, circuit limits, and sentiment feed: seeded demo cache modeled after NSE/BSE filings, corporate announcements, and finance-news/RSS outputs.
-- LLM summarization: optional by design. The current demo uses deterministic mock concall/news summaries when no API key is present.
+The service role key must remain server-only.
 
-## Scoring
+---
 
-The signed score is calculated from `config/scoringConfig.json` and stored with a full timestamped breakdown:
+## Deploy On Vercel
 
-- Price movement: max 25 points, with 2%, 5%, 10% thresholds and circuit-hit handling.
-- Volume vs average: max 20 points using 10%, 20%, 50%, 100% thresholds.
-- Quarterly earnings surprise: max 15 points.
-- News sentiment: max 15 points.
-- Technical indicators: max 10 points.
-- Analyst rating change: max 5 points.
-- Corporate action: max 5 points.
-- User-specific event: max 5 points.
+1. Push the repo to GitHub.
+2. Go to Vercel.
+3. Import the GitHub repository.
+4. Use these settings:
 
-Labels map from -100 to +100: Critical Negative, Strong Negative, Mild Negative, Neutral, Mild Positive, Strong Positive, and Exceptional Positive.
+```text
+Framework Preset: Vite
+Build Command: npm run build
+Output Directory: dist
+Install Command: npm install
+```
 
-## Demo Checklist
+5. Add environment variables in Vercel.
+6. Deploy.
 
-- Multi-user login with isolated watchlists, last visit, and access-aware attention tracking.
-- Multiple watchlists with create, rename, add, remove, and reorder.
-- Stock cards with price, sparkline, current score badge, and stale/updated state.
-- Pay Attention feed ranked by current score, score changes since the user last opened a stock, fresh news, and brokerage target updates.
-- Detail drill-down with straight OHLC reference line, earnings, YoY/QoQ, foreign brokerage target summary, concall summary and diff, holdings trends, latest news sentiment, corporate actions, and circuit limits.
-- Config-driven ticker list and scoring weights.
-- Graceful degradation via cached data and section-level stale labeling.
+After deployment, test:
+
+```text
+https://your-vercel-domain.vercel.app/api/health
+```
+
+Expected persistence mode:
+
+```json
+{
+  "persistence": {
+    "mode": "supabase",
+    "supabaseConfigured": true
+  }
+}
+```
+
+---
+
+## Performance Notes
+
+Vercel runs the backend as serverless functions. To keep interactions fast:
+
+- normal button actions use fast bootstrap without waiting for every Yahoo refresh
+- live refresh paths still fetch Yahoo data
+- Supabase session validation is cached briefly in warm functions
+- `/api/bootstrap?refresh=0` reloads user state quickly
+- `/api/bootstrap?refresh=1` refreshes watchlist prices
+
+If traffic grows, the next upgrade should be shared Redis/Upstash caching for quote data across Vercel function instances.
+
+---
+
+## Testing
+
+```powershell
+npm.cmd run check
+npm.cmd test
+npm.cmd run build
+```
+
+Current tests cover:
+
+- live/delayed/stale quote classification
+- market-closed quote handling
+- timestamp regression rejection
+- last-known quote fallback
+- duplicate in-flight request coalescing
+
+---
+
+## Limitations
+
+Nazara is an educational/project-grade stock watchlist app. It is not investment advice.
+
+Important limitations:
+
+- Yahoo Finance public endpoints can be delayed, rate-limited, or unavailable.
+- Vercel free/Hobby hosting is not unlimited.
+- Supabase free tier has usage limits.
+- Some fundamentals, holdings, concall, and corporate-action sections use seeded/fallback data when live structured sources are unavailable.
+- Brokerage summaries are based on public headlines and do not scrape paid brokerage reports.
+
+---
+
+## Why Nazara Matters
+
+Nazara is not just a stock list. It is a watchlist intelligence layer.
+
+It helps a user move from:
+
+```text
+What changed in all these stocks?
+```
+
+to:
+
+```text
+These are the few stocks I should check first, and here is why.
+```
+
+That is the core idea of the project.
