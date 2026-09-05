@@ -2,7 +2,7 @@
 
 <img src="public/logo.png" alt="Nazara Logo" width="90" />
 
-<h1><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=32&pause=1000&color=3B82F6&center=true&vCenter=true&width=560&lines=Nazara+%E2%80%94+Smart+Stock+Watchlist;Attention-Ranked+NSE+Feed;Know+What+Needs+You+Now." alt="Typing SVG" /></h1>
+<h1>Nazara</h1>
 
 <p><em>Not a flat price list. A ranked, scored, stateful attention radar for NSE investors.</em></p>
 
@@ -25,10 +25,8 @@
 | Without Nazara | With Nazara |
 |---|---|
 | 10+ tabs — quotes, news, charts | One ranked feed of what matters now |
-| Manual refresh every few minutes | Auto-poll with honest `LIVE / DELAYED / STALE` labels |
 | Flat green/red list, no context | Score-sorted cards (−100 to +100) with signal breakdown |
 | No memory of what you reviewed | Stateful `Needs review` vs `Viewed` per alert |
-| Delayed quotes hiding as real-time | Dual-timestamp audit: `marketTimestamp` vs `receivedAt` |
 
 ---
 
@@ -152,7 +150,7 @@ nazara/
 git clone https://github.com/Sejal707/Nazara-Smart-Stock-Watchlist-.git
 cd "Nazara-Smart-Stock-Watchlist-"
 npm.cmd install
-npm.cmd run dev         
+npm.cmd run dev       
 ```
 
 First login creates your account automatically and seeds a Starter Watchlist.
