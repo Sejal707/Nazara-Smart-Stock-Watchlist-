@@ -23,20 +23,16 @@ npm run seed
 
 Deploy this as one Node web service, not as a static-only site. The Express server serves both the API and the built React frontend.
 
-Recommended Render settings:
+Recommended Koyeb settings:
 
 ```text
+Repository: https://github.com/Sejal707/Nazara-Smart-Stock-Watchlist-
 Build command: npm install && npm run build
 Start command: npm start
-Environment variable: DATABASE_PATH=/var/data/nazara.sqlite
-Environment variable: FMP_API_KEY=your Financial Modeling Prep API key
-Persistent disk mount path: /var/data
 Node version: 24+
 ```
 
-This repository includes `render.yaml`, so Render can also deploy it as a Blueprint from GitHub. The persistent disk is important because it keeps user accounts, passwords, watchlists, viewed alerts, and cached stock data after server restarts.
-
-For accurate live deployed stock prices, set `FMP_API_KEY` on Render. Cloud providers often rate-limit public Yahoo Finance calls, so Nazara tries Financial Modeling Prep first when the key is present, then Yahoo Finance, then clearly labels cached fallback data if both fail.
+Nazara uses the Yahoo Finance chart endpoint for price and history data. Some free hosts may rate-limit outbound calls to Yahoo; if that happens, the app clearly labels the affected stock as a cached fallback.
 
 ## Architecture
 

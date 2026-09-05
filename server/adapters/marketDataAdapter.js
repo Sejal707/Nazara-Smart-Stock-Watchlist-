@@ -107,120 +107,6 @@ export class YahooFinanceChartAdapter extends DataSourceAdapter {
   }
 }
 
-export class FinancialModelingPrepAdapter extends DataSourceAdapter {
-  constructor(apiKey) {
-    super("Financial Modeling Prep API");
-    this.apiKey = apiKey;
-  }
-
-  isConfigured() {
-    return Boolean(this.apiKey);
-  }
-
-  fmpSymbol(symbol) {
-    return symbol.toUpperCase();
-  }
-
-  async history(symbol, range) {
-    if (!this.isConfigured()) throw new Error("Financial Modeling Prep API key is not configured");
-    const today = new Date();
-    const from = new Date(today);
-    if (range === "1D" || range === "1W") from.setDate(today.getDate() - 7);
-    else if (range === "1M") from.setMonth(today.getMonth() - 1);
-    else if (range === "3M") from.setMonth(today.getMonth() - 3);
-    else if (range === "1Y") from.setFullYear(today.getFullYear() - 1);
-    else if (range === "5Y") from.setFullYear(today.getFullYear() - 5);
-
-    const params = new URLSearchParams({
-      from: from.toISOString().slice(0, 10),
-      to: today.toISOString().slice(0, 10),
-      apikey: this.apiKey
-    });
-    const url = `https://financialmodelingprep.com/api/v3/historical-price-full/${encodeURIComponent(this.fmpSymbol(symbol))}?${params}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(5500) });
-    if (!response.ok) throw new Error(`Financial Modeling Prep history failed: ${response.status}`);
-    const body = await response.json();
-    const rows = Array.isArray(body.historical) ? body.historical : [];
-    if (!rows.length) throw new Error("Financial Modeling Prep response missing history payload");
-
-    return rows
-      .slice()
-      .reverse()
-      .map((row) => ({
-        time: new Date(row.date).toLocaleDateString("en-IN", range === "5Y" ? { year: "numeric", month: "short" } : { month: "short", day: "numeric" }),
-        date: new Date(row.date).toISOString(),
-        price: Number(Number(row.close).toFixed(2))
-      }))
-      .filter((point) => Number.isFinite(point.price));
-  }
-
-  async quote(symbol) {
-    if (!this.isConfigured()) throw new Error("Financial Modeling Prep API key is not configured");
-    const url = `https://financialmodelingprep.com/api/v3/quote/${encodeURIComponent(this.fmpSymbol(symbol))}?apikey=${encodeURIComponent(this.apiKey)}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(5500) });
-    if (!response.ok) throw new Error(`Financial Modeling Prep quote failed: ${response.status}`);
-    const body = await response.json();
-    const quote = Array.isArray(body) ? body[0] : null;
-    if (!quote || typeof quote.price !== "number") throw new Error("Financial Modeling Prep response missing quote payload");
-
-    const current = Number(quote.price.toFixed(2));
-    const open = Number((quote.open ?? quote.previousClose ?? current).toFixed(2));
-    const low = Number((quote.dayLow ?? current).toFixed(2));
-    const high = Number((quote.dayHigh ?? current).toFixed(2));
-    const previousClose = Number((quote.previousClose ?? current).toFixed(2));
-
-    return {
-      current,
-      open,
-      previousClose,
-      low,
-      high,
-      volume: Number(quote.volume ?? 0),
-      intraday: [
-        { time: "Open", price: open },
-        { time: "Low", price: low },
-        { time: "Current", price: current },
-        { time: "High", price: high }
-      ],
-      lastUpdated: new Date().toISOString()
-    };
-  }
-}
-
-export class FallbackMarketDataAdapter extends DataSourceAdapter {
-  constructor(adapters) {
-    super(adapters.map((adapter) => adapter.name).join(" -> "));
-    this.adapters = adapters;
-  }
-
-  async quote(symbol) {
-    const errors = [];
-    for (const adapter of this.adapters) {
-      if (typeof adapter.isConfigured === "function" && !adapter.isConfigured()) continue;
-      try {
-        const quote = await adapter.quote(symbol);
-        return { ...quote, sourceName: adapter.name };
-      } catch (error) {
-        errors.push(`${adapter.name}: ${error.message}`);
-      }
-    }
-    throw new Error(errors.join("; ") || "No market data adapter is configured");
-  }
-
-  async history(symbol, range) {
-    const errors = [];
-    for (const adapter of this.adapters) {
-      if (typeof adapter.isConfigured === "function" && !adapter.isConfigured()) continue;
-      try {
-        return await adapter.history(symbol, range);
-      } catch (error) {
-        errors.push(`${adapter.name}: ${error.message}`);
-      }
-    }
-    throw new Error(errors.join("; ") || "No market data adapter is configured");
-  }
-}
-
 export class ResilientMarketDataService {
   constructor({ adapter, getCachedDetail, saveDetail }) {
     this.adapter = adapter;
@@ -234,7 +120,7 @@ export class ResilientMarketDataService {
 
     try {
       const live = await this.adapter.quote(symbol);
-      const { intraday, lastUpdated, sourceName, ...liveQuote } = live;
+      const { intraday, lastUpdated, ...liveQuote } = live;
       const upperCircuitPercent = cached.quote.upperCircuit > cached.quote.open
         ? (cached.quote.upperCircuit / cached.quote.open) - 1
         : 0.1;
@@ -260,13 +146,13 @@ export class ResilientMarketDataService {
         intraday: intraday?.length ? intraday : cached.intraday,
         dataQuality: {
           ...cached.dataQuality,
-          source: sourceName ?? this.adapter.name,
+          source: this.adapter.name,
           label: "live/delayed public feed",
           stale: false,
           lastUpdated
         }
       };
-      this.saveDetail(symbol, updated, false, sourceName ?? this.adapter.name);
+      this.saveDetail(symbol, updated, false, this.adapter.name);
       return updated;
     } catch (error) {
       const stale = {
