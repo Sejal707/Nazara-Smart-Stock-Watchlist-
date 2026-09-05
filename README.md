@@ -71,20 +71,7 @@ graph TB
 
 ---
 
-## Data Quality — 6-State Truth Model
 
-Every quote carries **two timestamps**: `marketTimestamp` (exchange time) and `receivedAt` (when Nazara got it). This prevents stale data from masquerading as live.
-
-| Badge | Status | When It Fires |
-|---|---|---|
-| 🟢 `LIVE` | Fresh real-time | Market OPEN · age < 120s · lag < 20s |
-| 🟡 `DELAYED` | Behind live | Market OPEN · provider lag > 20s |
-| 🔵 `MARKET_CLOSED` | After-hours LTP | Outside 09:15–15:30 IST |
-| 🟠 `STALE` | Cached fallback | Upstream failure — last verified quote served |
-| 🔴 `UNAVAILABLE` | Bad payload | Zero/negative price or malformed OHLC |
-| 🩸 `CONFLICT` | Timestamp regression | New quote older than stored quote |
-
----
 
 ## Scoring Engine — (−100 to +100)
 
@@ -165,7 +152,7 @@ nazara/
 git clone https://github.com/Sejal707/Nazara-Smart-Stock-Watchlist-.git
 cd "Nazara-Smart-Stock-Watchlist-"
 npm.cmd install
-npm.cmd run dev          # → http://localhost:5173
+npm.cmd run dev         
 ```
 
 First login creates your account automatically and seeds a Starter Watchlist.
