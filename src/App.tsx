@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -84,6 +84,7 @@ export function App() {
   const [loginName, setLoginName] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const autoRefreshedWatchlists = useRef<Set<string>>(new Set());
 
   async function load() {
     if (!currentUser) return;
@@ -150,6 +151,7 @@ export function App() {
     setSelected(null);
     setLoginName("");
     setLoginPassword("");
+    autoRefreshedWatchlists.current.clear();
     setLoading(false);
   }
 
@@ -179,12 +181,18 @@ export function App() {
 
   useEffect(() => {
     if (!activeWatchlist?.stocks.length) return;
+    const key = `${currentUser?.id ?? "guest"}:${activeWatchlist.id}`;
+    if (!autoRefreshedWatchlists.current.has(key)) {
+      autoRefreshedWatchlists.current.add(key);
+      refreshActiveWatchlist(true).catch(() => null);
+    }
+
     const handle = window.setInterval(() => {
       refreshActiveWatchlist(true).catch(() => null);
     }, 30000);
 
     return () => window.clearInterval(handle);
-  }, [activeWatchlist?.id, activeWatchlist?.stocks.length]);
+  }, [currentUser?.id, activeWatchlist?.id, activeWatchlist?.stocks.length]);
 
   async function openStock(symbol: string) {
     setDetailTab("Overview");
@@ -331,10 +339,10 @@ export function App() {
             className="ghost-button live-prices-btn" 
             style={{ backgroundColor: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
             onClick={() => refreshActiveWatchlist()} 
-            disabled={busy} 
+            disabled={busy || isAutoRefreshing} 
             title="Refresh current watchlist prices"
           >
-            {busy ? <Loader2 className="spin" size={17} /> : <Activity size={17} />} Live prices
+            {busy || isAutoRefreshing ? <Loader2 className="spin" size={17} /> : <Activity size={17} />} {isAutoRefreshing ? "Updating..." : "Live prices"}
           </button>
           <button className="ghost-button" onClick={logout} title="Log out">
             <X size={17} /> Logout
