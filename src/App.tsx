@@ -96,12 +96,12 @@ export function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const autoRefreshedWatchlists = useRef<Set<string>>(new Set());
 
-  async function load() {
+  async function load({ refresh = true } = {}) {
     if (!currentUser) return;
     setError(null);
     let data: Bootstrap;
     try {
-      data = await api.bootstrap();
+      data = await api.bootstrap({ refresh });
     } catch (err) {
       if (err instanceof Error && (err.name === "AuthError" || err.message === "Login required")) {
         clearStoredSession();
@@ -209,7 +209,7 @@ export function App() {
     setSelected(null);
     const detail = await api.refreshStock(symbol).catch(() => api.stockDetail(symbol));
     setSelected(detail);
-    await load();
+    await load({ refresh: false });
   }
 
   async function openAttentionItem(item: MustLookItem) {
@@ -227,14 +227,14 @@ export function App() {
     const detail = await api.refreshStock(item.symbol).catch(() => api.stockDetail(item.symbol));
     await api.markAttentionViewed(detail.stock.symbol).catch(() => null);
     setSelected(detail);
-    await load();
+    await load({ refresh: false });
   }
 
   async function mutate(action: () => Promise<unknown>) {
     setBusy(true);
     try {
       await action();
-      await load();
+      await load({ refresh: false });
     } finally {
       setBusy(false);
     }
@@ -246,7 +246,7 @@ export function App() {
     try {
       setIsAutoRefreshing(true);
       await Promise.all(activeWatchlist.stocks.map((stock) => api.refreshStock(stock.symbol).catch(() => null)));
-      await load();
+      await load({ refresh: false });
       setLastAutoUpdated(new Date().toISOString());
       if (selected) {
         const detail = await api.stockDetail(selected.stock.symbol);
@@ -262,7 +262,7 @@ export function App() {
     if (!activeWatchlist?.stocks.length || busy) return;
     try {
       setIsAutoRefreshing(true);
-      await load();
+      await load({ refresh: true });
       setLastAutoUpdated(new Date().toISOString());
       if (selected) {
         const detail = await api.stockDetail(selected.stock.symbol);
@@ -310,7 +310,7 @@ export function App() {
 
   async function markVisited() {
     await api.markVisited();
-    await load();
+    await load({ refresh: false });
   }
 
   if (!currentUser) {
@@ -516,7 +516,7 @@ export function App() {
           onRefresh={async () => {
             const refreshed = await api.refreshStock(selected.stock.symbol);
             setSelected(refreshed);
-            await load();
+            await load({ refresh: false });
           }}
         />
       )}

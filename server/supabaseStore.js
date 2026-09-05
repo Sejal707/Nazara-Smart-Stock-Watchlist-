@@ -17,6 +17,13 @@ function enc(value) {
   return encodeURIComponent(String(value));
 }
 
+const sessionCacheMs = 5 * 60 * 1000;
+const sessionCache = new Map();
+
+function cacheSession(token, user) {
+  sessionCache.set(token, { user, expiresAt: Date.now() + sessionCacheMs });
+}
+
 async function parseResponse(response) {
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
@@ -148,13 +155,22 @@ export const supabaseStore = {
     if (!lastVisitedAt) {
       await this.setUserState(user.id, "lastVisitedAt", new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString());
     }
+    cacheSession(session.access_token, user);
     return { user, token: session.access_token };
   },
 
   getUserBySession(token) {
     const cleanToken = String(token ?? "").trim();
     if (!cleanToken) return Promise.resolve(null);
-    return userFromToken(cleanToken).catch(() => null);
+    const cached = sessionCache.get(cleanToken);
+    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.user);
+    sessionCache.delete(cleanToken);
+    return userFromToken(cleanToken)
+      .then((user) => {
+        cacheSession(cleanToken, user);
+        return user;
+      })
+      .catch(() => null);
   },
 
   async getUserState(userId, key, fallback = null) {
@@ -290,6 +306,11 @@ export const supabaseStore = {
 
   async accessedStocks(userId) {
     return restFetch(`/stock_access?user_id=eq.${enc(userId)}&select=symbol,last_accessed_at,view_count&order=last_accessed_at.desc&limit=8`);
+  },
+
+  async attentionViews(userId, symbols = []) {
+    if (!symbols.length) return [];
+    return restFetch(`/attention_views?user_id=eq.${enc(userId)}&symbol=in.(${symbols.map(enc).join(",")})&select=symbol,alert_happened_at,viewed_at`);
   },
 
   async getAttentionView(userId, symbol) {

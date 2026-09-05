@@ -125,9 +125,9 @@ function watchlistStockFromSymbol(symbol) {
   };
 }
 
-async function listWatchlists(userId) {
+async function listWatchlists(userId, existingLists = null) {
   if (supabaseStore.enabled) {
-    const lists = await supabaseStore.listWatchlists(userId);
+    const lists = existingLists ?? await supabaseStore.listWatchlists(userId);
     return lists.map((list) => ({
       id: list.id,
       name: list.name,
@@ -155,9 +155,9 @@ async function listWatchlists(userId) {
   });
 }
 
-async function watchedStockRows(userId) {
+async function watchedStockRows(userId, existingSymbols = null) {
   if (supabaseStore.enabled) {
-    const symbols = await supabaseStore.watchlistSymbols(userId);
+    const symbols = existingSymbols ?? await supabaseStore.watchlistSymbols(userId);
     if (!symbols.length) return [];
     const placeholders = symbols.map(() => "?").join(",");
     return db.prepare(`SELECT DISTINCT symbol, name, sector FROM stocks WHERE symbol IN (${placeholders})`)
@@ -172,10 +172,15 @@ async function watchedStockRows(userId) {
   `).all(userId);
 }
 
-async function mustLookSince(userId, lastVisitedAt) {
+function attentionViewFor(cache, userId, symbol) {
+  if (cache?.has(symbol)) return cache.get(symbol);
+  return userStore.getAttentionView(userId, symbol);
+}
+
+async function mustLookSince(userId, lastVisitedAt, existingSymbols = null, attentionCache = null) {
   let rows;
   if (supabaseStore.enabled) {
-    const symbols = await supabaseStore.watchlistSymbols(userId);
+    const symbols = existingSymbols ?? await supabaseStore.watchlistSymbols(userId);
     if (!symbols.length) return [];
     const placeholders = symbols.map(() => "?").join(",");
     rows = db.prepare(`
@@ -200,7 +205,7 @@ async function mustLookSince(userId, lastVisitedAt) {
 
   const items = [];
   for (const row of rows) {
-    const attentionView = await userStore.getAttentionView(userId, row.symbol);
+    const attentionView = await attentionViewFor(attentionCache, userId, row.symbol);
     const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(row.happened_at) : false;
     items.push({
       id: row.id,
@@ -228,9 +233,9 @@ function latestTimestamp(...values) {
   return new Date(Math.max(...times)).toISOString();
 }
 
-async function attentionFeed(userId, lastVisitedAt) {
-  const rows = await watchedStockRows(userId);
-  const accessedRows = supabaseStore.enabled ? await supabaseStore.accessedStocks(userId) : [];
+async function attentionFeed(userId, lastVisitedAt, existingSymbols = null, existingAccessedRows = null, attentionCache = null) {
+  const rows = await watchedStockRows(userId, existingSymbols);
+  const accessedRows = supabaseStore.enabled ? existingAccessedRows ?? await supabaseStore.accessedStocks(userId) : [];
 
   const items = [];
   for (const row of rows) {
@@ -250,7 +255,7 @@ async function attentionFeed(userId, lastVisitedAt) {
     const freshNews = latestNews && new Date(latestNews.date) > new Date(lastSeenForStock);
     const freshBrokerage = detail.brokerage && new Date(detail.brokerage.lastUpdated) > new Date(lastSeenForStock);
     const happenedAt = latestTimestamp(detail.dataQuality.lastUpdated, latestNews?.date, detail.brokerage?.lastUpdated);
-    const attentionView = await userStore.getAttentionView(userId, row.symbol);
+    const attentionView = await attentionViewFor(attentionCache, userId, row.symbol);
     const viewed = attentionView ? new Date(attentionView.alertHappenedAt) >= new Date(happenedAt) : false;
     const reasons = detail.score.breakdown
       .filter((reason) => Math.abs(reason.points) >= 4)
@@ -410,21 +415,36 @@ app.get("/api/bootstrap", async (req, res) => {
   const user = await requestUser(req, res);
   if (!user) return;
   await userStore.seedWatchlistsForUser(user.id);
-  const lastVisitedAt = await userStore.getUserState(user.id, "lastVisitedAt", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  const shouldRefreshQuotes = req.query.refresh !== "0";
+  const lastVisitedFallback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const [lastVisitedAt, supabaseWatchlists, supabaseAccessedRows] = await Promise.all([
+    userStore.getUserState(user.id, "lastVisitedAt", lastVisitedFallback),
+    supabaseStore.enabled ? supabaseStore.listWatchlists(user.id) : Promise.resolve(null),
+    supabaseStore.enabled ? supabaseStore.accessedStocks(user.id) : Promise.resolve(null)
+  ]);
   const watchlistSymbols = supabaseStore.enabled
-    ? await supabaseStore.watchlistSymbols(user.id)
+    ? [...new Set(supabaseWatchlists.flatMap((list) => list.symbols.map((row) => row.symbol)))]
     : db.prepare(`
       SELECT DISTINCT ws.symbol
       FROM watchlist_stocks ws
       JOIN watchlists w ON w.id = ws.watchlist_id
       WHERE w.user_id = ?
     `).all(user.id).map((row) => row.symbol);
-  await refreshSymbols(watchlistSymbols, { force: false });
-  const watchlists = await listWatchlists(user.id);
-  const mustLook = await mustLookSince(user.id, lastVisitedAt);
-  const feed = await attentionFeed(user.id, lastVisitedAt);
+  if (shouldRefreshQuotes) {
+    await refreshSymbols(watchlistSymbols, { force: false });
+  }
+  const attentionRows = supabaseStore.enabled ? await supabaseStore.attentionViews(user.id, watchlistSymbols) : [];
+  const attentionCache = new Map(attentionRows.map((row) => [
+    row.symbol,
+    { alertHappenedAt: row.alert_happened_at, viewedAt: row.viewed_at }
+  ]));
+  const [watchlists, mustLook, feed] = await Promise.all([
+    listWatchlists(user.id, supabaseWatchlists),
+    mustLookSince(user.id, lastVisitedAt, watchlistSymbols, attentionCache),
+    attentionFeed(user.id, lastVisitedAt, watchlistSymbols, supabaseAccessedRows, attentionCache)
+  ]);
   const accessedStocks = supabaseStore.enabled
-    ? (await supabaseStore.accessedStocks(user.id)).map((row) => {
+    ? supabaseAccessedRows.map((row) => {
       const stock = db.prepare("SELECT name, sector FROM stocks WHERE symbol = ?").get(row.symbol);
       return {
         symbol: row.symbol,

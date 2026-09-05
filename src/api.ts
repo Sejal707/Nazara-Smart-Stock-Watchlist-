@@ -52,7 +52,7 @@ export const api = {
   login: (displayName: string, password: string) =>
     request<{ user: User; token: string }>("/api/auth/login", { method: "POST", body: JSON.stringify({ displayName, password }) }),
   me: () => request<{ user: User }>("/api/auth/me"),
-  bootstrap: () => request<Bootstrap>("/api/bootstrap"),
+  bootstrap: ({ refresh = true } = {}) => request<Bootstrap>(`/api/bootstrap?refresh=${refresh ? "1" : "0"}`),
   searchStocks: (q: string, limit = 80) =>
     request<Stock[]>(`/api/stocks?q=${encodeURIComponent(q)}&limit=${limit}`),
   syncStocks: () =>
